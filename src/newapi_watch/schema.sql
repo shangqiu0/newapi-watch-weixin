@@ -1,0 +1,47 @@
+-- Schema v1. UTC epoch timestamps; channel/log IDs belong to one configured instance.
+CREATE TABLE IF NOT EXISTS metadata (
+ id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '',
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS channels (
+ id INTEGER PRIMARY KEY, payload TEXT NOT NULL DEFAULT '{}', status INTEGER NOT NULL DEFAULT 0,
+ is_present INTEGER NOT NULL DEFAULT 1,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS logs (
+ id INTEGER PRIMARY KEY, type INTEGER NOT NULL DEFAULT 0, channel_id INTEGER NOT NULL DEFAULT 0,
+ user_id INTEGER NOT NULL DEFAULT 0, username TEXT NOT NULL DEFAULT '', model_name TEXT NOT NULL DEFAULT '',
+ quota INTEGER NOT NULL DEFAULT 0, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+ completion_tokens INTEGER NOT NULL DEFAULT 0, use_time REAL NOT NULL DEFAULT 0,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_logs_time_type ON logs(created_at,type);
+CREATE INDEX IF NOT EXISTS idx_logs_channel_time ON logs(channel_id,created_at);
+CREATE TABLE IF NOT EXISTS alerts (
+ id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, state TEXT NOT NULL DEFAULT 'firing',
+ title TEXT NOT NULL DEFAULT '', level TEXT NOT NULL DEFAULT 'warning', generation INTEGER NOT NULL DEFAULT 1,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS notifications (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, dedupe_key TEXT NOT NULL UNIQUE,
+ content TEXT NOT NULL DEFAULT '', image BLOB, status TEXT NOT NULL DEFAULT 'pending',
+ attempts INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0,
+ lease_until REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_notify_order ON notifications(status,id);
+CREATE TABLE IF NOT EXISTS silences (
+ id INTEGER PRIMARY KEY, until_at REAL NOT NULL DEFAULT 0,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS receipts (
+ id TEXT PRIMARY KEY, expires_at REAL NOT NULL DEFAULT 0,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS probes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL DEFAULT 0,
+ success INTEGER NOT NULL DEFAULT 0, latency REAL NOT NULL DEFAULT 0,
+ created_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_probes_channel_time ON probes(channel_id,created_at);
+PRAGMA user_version = 1;
