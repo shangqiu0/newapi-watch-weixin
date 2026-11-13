@@ -30,6 +30,7 @@ class PolicyRepository:
         error: str = "",
         detail: dict[str, Any] | None = None,
         not_before: float = 0,
+        pending: bool = False,
     ) -> None:
         async with self.store.transaction() as db:
             previous = await row(
@@ -37,16 +38,20 @@ class PolicyRepository:
             )
             failures = int(previous["failures"]) + 1 if error and previous else int(bool(error))
             next_at = now + (min(900, interval * 2 ** min(failures - 1, 5)) if error else interval)
+            if pending:
+                failures = int(previous["failures"]) if previous else 0
             next_at = max(next_at, not_before)
             last_ok = float(previous["last_ok_at"]) if error and previous else (0 if error else now)
+            if pending:
+                last_ok = float(previous["last_ok_at"]) if previous else 0
             await db.execute(
                 """INSERT INTO monitor_checks(id,status,last_at,last_ok_at,next_at,failures,error,detail,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,last_at=excluded.last_at,
                 last_ok_at=excluded.last_ok_at,next_at=excluded.next_at,failures=excluded.failures,error=excluded.error,
-                detail=CASE WHEN excluded.status='unknown' THEN monitor_checks.detail ELSE excluded.detail END,updated_at=excluded.updated_at""",
+                detail=CASE WHEN excluded.status='unknown' AND excluded.detail='{}' THEN monitor_checks.detail ELSE excluded.detail END,updated_at=excluded.updated_at""",
                 (
                     key,
-                    "unknown" if error else "ok",
+                    "unknown" if error else "pending" if pending else "ok",
                     now,
                     last_ok,
                     next_at,
@@ -68,6 +73,7 @@ class PolicyRepository:
         now: float,
         *,
         evidence: dict[str, Any] | None = None,
+        repeat_notifications: bool = True,
     ) -> None:
         if active is None:
             async with self.store.transaction() as db:
@@ -83,7 +89,11 @@ class PolicyRepository:
             current_active = (was_active or firing) if active else False
             last_sent = float(previous["last_sent_at"]) if previous else 0
             notify = (
-                firing and (not was_active or now - last_sent >= policy.cooldown_seconds)
+                firing
+                and (
+                    not was_active
+                    or (repeat_notifications and now - last_sent >= policy.cooldown_seconds)
+                )
             ) or (was_active and not active and policy.notify_recovery)
             if firing or (was_active and not active):
                 await record_alert(db, key, text, current_active, "warning", now)

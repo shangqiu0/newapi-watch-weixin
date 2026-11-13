@@ -144,6 +144,7 @@ export interface ChannelRule extends PolicySettings {
 }
 export interface SourceRule extends PolicySettings {
   enabled: boolean;
+  repeat_notifications: boolean;
 }
 export interface ErrorRule extends PolicySettings {
   poll_seconds: number;
@@ -170,6 +171,9 @@ export interface BalanceRule extends PolicySettings {
   mention_all: boolean;
 }
 export interface Schedule {
+  pages_per_run: number;
+  max_failures: number;
+  retry_seconds: number;
   binding_ids: string[];
   enabled: boolean;
   hour: number;

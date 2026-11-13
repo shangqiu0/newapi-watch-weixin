@@ -41,6 +41,12 @@ class LogRecord(BaseModel):
     channel_name: str = Field(default="", max_length=512)
 
 
+class LogPage(BaseModel):
+    items: list[LogRecord]
+    total: int | None = None
+    page_size: int | None = None
+
+
 class UserInfo(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: int

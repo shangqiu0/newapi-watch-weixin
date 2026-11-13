@@ -102,7 +102,7 @@ class PolicyEngine:
                     rule = next(r for r in c.balances if f"balance:{r.user_id}" == key)
                     callback = partial(self.checks.balance, rule, now)
                 else:
-                    callback = partial(self.report, key, now)
+                    callback = partial(self.report, key, now, retry=force)
                 task = asyncio.create_task(
                     self.dispatch(key, definition["interval"], callback, now), name="check-" + key
                 )
@@ -148,6 +148,9 @@ class PolicyEngine:
         callback: Callable[[], Awaitable[dict[str, Any]]],
         now: float,
     ) -> None:
+        if key in {"daily", "weekly"}:
+            await self.run_report(key, interval, callback, now)
+            return
         error = ""
         retry_after = 0
         try:
@@ -180,7 +183,13 @@ class PolicyEngine:
                 else f"监控检查恢复\n检查：{key}"
             ) + f"\n时间：{timestamp(now)}"
             await self.repo.condition(
-                f"policy:source:{key}", bool(error), text, policy, "service", now
+                f"policy:source:{key}",
+                bool(error),
+                text,
+                policy,
+                "service",
+                now,
+                repeat_notifications=policy.repeat_notifications,
             )
 
     async def errors(self, now: float) -> dict[str, Any]:
@@ -207,11 +216,70 @@ class PolicyEngine:
             "complete": True,
         }
 
-    async def report(self, kind: str, now: float) -> dict[str, Any]:
-        await self.service.reports(
-            datetime.fromtimestamp(now, ZoneInfo(self.runtime.settings.timezone)), only=kind
+    async def report(self, kind: str, now: float, *, retry: bool = False) -> dict[str, Any]:
+        return await self.service.reports(
+            datetime.fromtimestamp(now, ZoneInfo(self.runtime.settings.timezone)),
+            only=kind,
+            retry=retry,
         )
-        return {"note": "独立报告调度；仅到时查询上游"}
+
+    async def run_report(
+        self,
+        key: str,
+        interval: float,
+        callback: Callable[[], Awaitable[dict[str, Any]]],
+        now: float,
+    ) -> None:
+        # Each page has a 30s limit and each successful page is checkpointed. A report
+        # must not be cancelled by the channel monitor's fixed 45s whole-window budget.
+        try:
+            async with asyncio.timeout(120):
+                detail = await callback()
+        except (UpstreamError, TimeoutError, ValueError) as failure:
+            detail = {
+                "report_stage": "failed",
+                "error": redact_text(str(failure), self.runtime.settings)
+                or "报告任务超时，已保留分页进度",
+                "attempt_failed": True,
+                "next_at": now + 900,
+            }
+        except Exception as failure:
+            logger.error("report_job_failed kind=%s type=%s", key, type(failure).__name__)
+            detail = {
+                "report_stage": "failed",
+                "error": "报告内部执行失败，请查看后台日志",
+                "attempt_failed": True,
+                "next_at": now + 900,
+            }
+        stage = detail["report_stage"]
+        error = str(detail.get("error", "")) if stage in {"failed", "paused"} else ""
+        await self.repo.finish(
+            key,
+            now,
+            interval,
+            error=error,
+            detail=detail,
+            not_before=float(detail.get("next_at", now + 60)),
+            pending=stage == "collecting",
+        )
+        policy = self.service.config.source
+        if not policy.enabled or (not detail.get("attempt_failed") and stage != "queued"):
+            return
+        title = "日报" if key == "daily" else "周报"
+        text = (
+            f"{title}生成失败\n原因：{error}\n已保存读取进度，重试受本期次数限制；渠道与余额监控独立运行"
+            if error
+            else f"{title}生成恢复\n本期完整报告已加入通知队列"
+        ) + f"\n时间：{timestamp(now)}"
+        await self.repo.condition(
+            f"policy:source:{key}",
+            bool(error),
+            text,
+            policy,
+            "service",
+            now,
+            repeat_notifications=False,
+        )
 
     async def snapshot(self, *, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now

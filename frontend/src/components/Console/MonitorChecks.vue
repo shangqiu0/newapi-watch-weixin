@@ -9,6 +9,12 @@ withDefaults(defineProps<{ checks: MonitorCheck[]; timezone?: string }>(), {
 function label(check: MonitorCheck): string {
   if (!check.enabled) return "已停用";
   if (check.checking) return "正在检查";
+  const stage = check.detail.report_stage;
+  if (stage === "collecting") return "报告汇总中";
+  if (stage === "paused") return "本期已暂停";
+  if (stage === "failed") return "报告生成失败";
+  if (stage === "queued") return "报告已入队";
+  if (stage === "scheduled") return "等待计划时间";
   if (check.stale) return "检查已逾期";
   return {
     ok: "检查成功",
@@ -47,6 +53,16 @@ function tone(check: MonitorCheck): "ok" | "warn" | "muted" {
           :text="label(row as MonitorCheck)"
           :tone="tone(row as MonitorCheck)"
         /><small
+          v-if="row.detail.report_stage === 'collecting'"
+          class="check-caption"
+          >已读取 {{ number(row.detail.records_fetched) }} /
+          {{
+            row.detail.total_records === null
+              ? "未知总数"
+              : number(row.detail.total_records)
+          }}
+          条，已完成页不会重读</small
+        ><small
           v-if="row.error && row.enabled"
           class="check-caption error-text"
           >{{ row.error }}</small

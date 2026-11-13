@@ -10,7 +10,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import Channel, LogRecord, ProbeResult, UserInfo
+from .models import Channel, LogPage, LogRecord, ProbeResult, UserInfo
 from .redaction import redact_text
 from .upstream_throttle import RequestThrottle
 from .upstream_throttle import UpstreamError as UpstreamError
@@ -126,6 +126,42 @@ class NewAPIClient:
             return [self.safe_log(item) for item in records]
         except ValidationError:
             raise UpstreamError("NewAPI 日志字段不兼容") from None
+
+    async def log_page(self, start: int, end: int, page: int) -> LogPage:
+        if not 1 <= page <= self.settings.max_pages:
+            raise UpstreamError("报告日志超过分页上限，未生成不完整报告")
+        payload = await self.request(
+            "/api/log/",
+            {
+                "start_timestamp": start,
+                "end_timestamp": end,
+                "type": 0,
+                "p": page,
+                "page_size": self.settings.page_size,
+            },
+        )
+        data = payload.get("data")
+        total = size = None
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict) and isinstance(data.get("items"), list):
+            items = data["items"]
+            total, size = data.get("total"), data.get("page_size")
+            if total is not None and (type(total) is not int or total < 0):
+                raise UpstreamError("报告日志分页总数无效")
+            if size is not None and (type(size) is not int or size < 1):
+                raise UpstreamError("报告日志分页大小无效")
+        else:
+            raise UpstreamError("报告日志分页结构不兼容")
+        if len(items) > self.settings.page_size:
+            raise UpstreamError("报告日志单页超过请求上限")
+        try:
+            records = [self.safe_log(item) for item in items if isinstance(item, dict)]
+            if len(records) != len(items) or len({r.id for r in records}) != len(records):
+                raise ValueError("分页记录无效或重复")
+            return LogPage(items=records, total=total, page_size=size)
+        except (ValidationError, ValueError):
+            raise UpstreamError("报告日志字段无效或分页重复") from None
 
     async def users(self, keyword: str) -> list[UserInfo]:
         records = await self.pages("/api/user/search", {"keyword": keyword})

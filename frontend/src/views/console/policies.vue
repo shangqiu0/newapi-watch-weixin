@@ -363,6 +363,9 @@ async function showPreview(): Promise<void> {
                     >@ 所有人</el-checkbox
                   >
                 </div>
+                <el-checkbox v-model="config.source.repeat_notifications"
+                  >持续失败按冷却周期重复提醒（默认关闭）</el-checkbox
+                >
                 <el-form-item label="服务告警 Webhook"
                   ><PolicyTargets
                     v-model="config.source.binding_ids"

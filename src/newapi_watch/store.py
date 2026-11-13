@@ -348,6 +348,9 @@ class Store:
             await db.execute(
                 "DELETE FROM metadata WHERE id LIKE 'policy:run:%' AND updated_at<?", (before,)
             )
+            await db.execute(
+                "DELETE FROM metadata WHERE id LIKE 'report_job:%' AND updated_at<?", (before,)
+            )
             await db.execute("DELETE FROM receipts WHERE expires_at<?", (before,))
             await db.execute(
                 "DELETE FROM notifications WHERE status='sent' AND updated_at<?", (before,)

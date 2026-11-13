@@ -48,6 +48,7 @@ class ChannelRule(Policy):
 
 
 class SourceRule(Policy):
+    repeat_notifications: bool = False
     enabled: bool = True
     confirmations: int = Field(default=3, ge=1, le=20)
 
@@ -96,6 +97,9 @@ class BalanceRule(Policy):
 
 
 class ReportSchedule(Config):
+    pages_per_run: int = Field(default=5, ge=1, le=10)
+    max_failures: int = Field(default=3, ge=1, le=10)
+    retry_seconds: int = Field(default=900, ge=30, le=86400)
     binding_ids: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
         default_factory=list, max_length=100
     )

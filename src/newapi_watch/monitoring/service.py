@@ -3,17 +3,15 @@
 import hashlib
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import aiosqlite
 
-from ..analytics import Snapshot
 from ..client import UpstreamError
 from ..models import LogRecord
-from ..periods import StatisticsQuery
 from ..persistence import enqueue, row, rows
 from ..redaction import redact_text
 from .models import ErrorRule, MonitoringConfig
@@ -57,6 +55,9 @@ class MonitoringService:
         from .engine import PolicyEngine
 
         self.engine = PolicyEngine(self)
+        from .report_jobs import ScheduledReports
+
+        self.report_jobs = ScheduledReports(runtime)
 
     async def errors(self, records: list[LogRecord], *, now: float | None = None) -> None:
         rule = self.config.errors
@@ -181,45 +182,29 @@ class MonitoringService:
                         (int(rule.mention_all), key),
                     )
 
-    async def reports(self, now: datetime | None = None, *, only: str | None = None) -> None:
+    async def reports(
+        self, now: datetime | None = None, *, only: str | None = None, retry: bool = False
+    ) -> dict[str, Any]:
         now = now or datetime.now(ZoneInfo(self.runtime.settings.timezone))
+        result: dict[str, Any] = {"report_stage": "scheduled", "note": "报告调度已停用"}
         for kind, schedule in [("daily", self.config.daily), ("weekly", self.config.weekly)]:
             if only and kind != only:
                 continue
-            if not schedule.enabled or (now.hour, now.minute) < (schedule.hour, schedule.minute):
-                continue
-            if kind == "weekly" and now.weekday() != schedule.weekday:
-                continue
-            end = now.date() - timedelta(days=1)
-            start = end - timedelta(days=6) if kind == "weekly" else end
-            key = f"scheduled:{kind}:{start}:{end}"
-            async with self.runtime.store.transaction() as db:
-                if await row(db, "SELECT id FROM notifications WHERE dedupe_key=?", (key,)):
-                    continue
-            query = StatisticsQuery(start=start, end=end)
-            data = await self.runtime.commands.data.statistics(query)
-            summary = data["summary"]
-            title = "周报" if kind == "weekly" else "日报"
-            text = (
-                f"{title} · {start.year}年{start.month}月{start.day}日 至 {end.month}月{end.day}日\n来源：绑定平台管理接口 · 日志完整分页\n消费记录：{summary['success_records']:,}\n错误记录：{summary['error_records']:,}\n消耗：{summary['quota']:,} quota\nToken：{summary['tokens']:,}\n"
-                + "\n".join(
-                    f"{i + 1}. {item['label']} · {item['quota']:,} quota"
-                    for i, item in enumerate(data["ranking"])
-                )
-            )
-            image = (
-                await self.runtime.reports._image(Snapshot.model_validate(data), "trend")
-                if schedule.with_image
-                else None
-            )
-            async with self.runtime.store.transaction() as db:
-                await enqueue(db, key, text, now.timestamp(), image)
-                await db.execute(
-                    "UPDATE notifications SET kind=?,binding_ids=? WHERE dedupe_key=?",
-                    (kind, json.dumps(schedule.binding_ids), key),
-                )
+            if schedule.enabled:
+                result = await self.report_jobs.advance(kind, schedule, now, retry=retry)
+        return result
 
     async def initialize(self) -> None:
+        async with self.runtime.store.transaction() as db:
+            if not await row(db, "SELECT id FROM metadata WHERE id='policy:report_route_v2'"):
+                await db.execute("""UPDATE notifications SET status='historical',lease_until=0,
+                    last_error='旧日报/周报超时重复通知，已停止历史重放；未实际补发'
+                    WHERE kind='service' AND status='pending' AND
+                    (dedupe_key LIKE 'policy:policy:source:daily:%' OR dedupe_key LIKE 'policy:policy:source:weekly:%')""")
+                await db.execute(
+                    "UPDATE monitor_checks SET next_at=0 WHERE id IN ('daily','weekly')"
+                )
+                await self.runtime.store.put_meta(db, "policy:report_route_v2", "1", time.time())
         # Preserve old messages for review, but never replay a collector backlog as new policy alerts.
         async with self.runtime.store.transaction() as db:
             if await row(db, "SELECT id FROM metadata WHERE id='policy:mode_initialized'"):
