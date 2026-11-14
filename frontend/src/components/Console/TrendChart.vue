@@ -30,7 +30,7 @@ function draw() {
       formatter: (params: unknown) => {
         const p = (params as { dataIndex: number }[])[0];
         const item = points[p.dataIndex];
-        return `${timeCN(item.label, props.data.timezone)}\n消耗 ${number(item.quota)} quota\n消费 ${number(item.success_records)} · 错误 ${number(item.error_records)}`;
+        return `${timeCN(item.label, props.data.timezone)}\n消耗 ${number(item.quota)} quota\n消费 ${number(item.success_records)} · 错误 ${props.data.unavailable_metrics?.includes("error_records") ? "未提供" : number(item.error_records)}`;
       }
     },
     xAxis: {

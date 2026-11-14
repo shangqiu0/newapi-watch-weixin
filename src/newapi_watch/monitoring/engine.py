@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from ..client import UpstreamError
 from ..redaction import redact_text
+from ..upstream_throttle import request_priority
 from .checks import StateChecks, timestamp
 from .repository import PolicyRepository
 
@@ -154,8 +155,9 @@ class PolicyEngine:
         error = ""
         retry_after = 0
         try:
-            async with asyncio.timeout(45):
-                detail = await callback()
+            with request_priority(0):
+                async with asyncio.timeout(45):
+                    detail = await callback()
         except (UpstreamError, TimeoutError) as exc:
             retry_after = int(getattr(exc, "retry_after", 0))
             error = redact_text(str(exc) or "本次检查超过45秒预算", self.runtime.settings)

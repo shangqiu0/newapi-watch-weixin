@@ -35,7 +35,8 @@ async def test_v1_database_migrates_without_losing_state(tmp_path):
         assert await first.get_meta("old-checkpoint") == "123"
         assert (await first.notifications())[0]["content"] == "keep-me"
         async with first.transaction() as db:
-            assert (await row(db, "PRAGMA user_version"))["user_version"] == 4
+            assert (await row(db, "PRAGMA user_version"))["user_version"] == 6
+            assert (await row(db, "SELECT COUNT(*) AS n FROM query_jobs"))["n"] == 0
         assert (await Operations(first).dead_letters())["total"] == 1
     finally:
         await first.close()

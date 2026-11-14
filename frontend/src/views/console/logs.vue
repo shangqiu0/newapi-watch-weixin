@@ -11,18 +11,19 @@ const store = usePlatformStore(),
   period = ref("今天"),
   type = ref(0),
   httpStatus = ref<number | undefined>(),
+  cursor = ref(""),
   selected = ref<LogRecord | null>(null),
   drawer = ref(false);
-watch(
-  [() => store.currentId, period, type, httpStatus, size],
-  () => (page.value = 1)
-);
+watch([() => store.currentId, period, type, httpStatus, size], () => {
+  page.value = 1;
+  cursor.value = "";
+});
 const { data, loading, error, refresh, total } = usePagedRemote<
-  Page<LogRecord>
+  Page<LogRecord> & { cursor?: string; has_more?: boolean; limitation?: string }
 >(
   () =>
     store.currentId
-      ? `/platforms/${store.currentId}/logs?period=${encodeURIComponent(period.value)}&page=${page.value}&page_size=${size.value}&log_type=${type.value}&http_status=${httpStatus.value ?? 0}`
+      ? `/platforms/${store.currentId}/logs?period=${encodeURIComponent(period.value)}&page=${page.value}&page_size=${size.value}&log_type=${type.value}&http_status=${httpStatus.value ?? 0}&cursor=${cursor.value}`
       : "",
   () => store.currentId
 );
@@ -58,7 +59,7 @@ const columns = [
 <template>
   <ConsolePage
     title="请求日志"
-    description="按指定日期向平台管理接口完整分页查询，错误信息在服务端脱敏"
+    description="向绑定平台按页查询；HTTP状态码采用有界错误日志扫描，可继续读取，不伪造全量总数"
     @refresh="refresh"
     ><template #actions
       ><el-button :loading="loading" @click="refresh"
@@ -84,9 +85,11 @@ const columns = [
           placeholder="HTTP 状态码"
           aria-label="HTTP状态码"
           :controls="false"
-        /><span class="toolbar-meta"
-          >{{ number(data?.total) }} 条 · 平台管理 API</span
-        >
+        /><span class="toolbar-meta">{{
+          httpStatus
+            ? `本批 ${number(data?.items.length)} 条匹配 · 总数未统计`
+            : `${number(data?.total)} 条 · 平台管理 API`
+        }}</span>
       </div>
       <el-alert
         v-if="error"
@@ -115,7 +118,24 @@ const columns = [
             >详情</el-button
           ></template
         ></pure-table
-      ><el-pagination
+      >
+      <div v-if="httpStatus" class="table-toolbar">
+        <span>{{ data?.limitation }}</span
+        ><el-button
+          :disabled="!data?.has_more || loading"
+          @click="cursor = data?.cursor ?? ''"
+          >继续查找</el-button
+        ><el-button
+          :disabled="loading"
+          @click="
+            cursor = '';
+            refresh();
+          "
+          >从头查询</el-button
+        >
+      </div>
+      <el-pagination
+        v-else
         v-model:current-page="page"
         v-model:page-size="size"
         :page-sizes="[20, 50, 100]"

@@ -26,6 +26,8 @@ from .monitoring.service import MonitoringService
 from .notifications import GroupWebhookNotifier, NotificationWorker
 from .periods import StatisticsQuery
 from .plugins import Registry
+from .query_engine.engine import QueryEngine
+from .query_engine.error_search import ErrorSearch
 from .reports import Reports
 from .store import Store
 
@@ -56,6 +58,9 @@ class Runtime:
         self.monitor = Monitor(settings, self.store, self.client)
         self.reports = Reports(settings, self.store)
         self.commands = Commands(settings, self.store, self.client, self.monitor, self.reports)
+        self.query_engine = QueryEngine(self.store, self.client)
+        self.error_search = ErrorSearch(self.client)
+        self.commands.error_search = self.error_search
         self.owns_llm_http = llm_http is None and settings.llm_enabled and not settings.demo
         self.llm_http = llm_http or (
             httpx.AsyncClient(timeout=25, follow_redirects=False)
@@ -111,6 +116,7 @@ class Runtime:
                 await self.store.set_meta("policy:last_run", json.dumps(last_run))
                 await self.store.set_meta("policy:run:" + last_run["id"], json.dumps(last_run))
             self.commands.live_queries = True
+            self.commands.query_engine = self.query_engine
 
             async def live_snapshot(query: StatisticsQuery) -> Snapshot:
                 return Snapshot.model_validate(await self.commands.data.statistics(query))
@@ -133,6 +139,8 @@ class Runtime:
                 ("notifications", 1, self.notifications.process_one),
                 ("retention", 3600, self.prune),
             ]
+        if self.policies is not None:
+            jobs.append(("interactive-queries", 1, self.query_engine.jobs.tick))
         if self.settings.probe_enabled:
             jobs.append(("probes", self.settings.probe_seconds, self.monitor.probe_enabled))
         jobs.extend(
@@ -195,6 +203,7 @@ class Runtime:
         before = time.time() - self.settings.retention_days * 86400
         await self.store.prune(before)
         await self.commands.audits.prune(before)
+        await self.query_engine.jobs.prune()
 
     async def close(self) -> None:
         self.stop.set()
@@ -203,6 +212,8 @@ class Runtime:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.policies:
             await self.policies.close()
+        await self.query_engine.close()
+        await self.error_search.cache.close()
         if self.owns_http:
             await self.http.aclose()
         await self.notify_http.aclose()

@@ -3,7 +3,9 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +16,7 @@ from .bot import BotGateway
 from .config import Settings
 from .control_store import ControlError, ControlStore
 from .health import Health
+from .persistence import rows
 from .runtime import Runtime
 from .targets import Targets
 
@@ -158,12 +161,104 @@ class Fleet:
                                 runtime.periodic("bot-" + binding["id"], 5, bot.run)
                             )
                         )
+                if config.enabled and self.start_tasks and not self.demo:
+                    runtime.tasks.append(
+                        asyncio.create_task(
+                            runtime.periodic(
+                                "query-delivery", 3, lambda: self.deliver_queries(platform_id)
+                            )
+                        )
+                    )
                 self.failures.pop(platform_id, None)
             except BaseException:
                 await runtime.close()
                 self.entries.pop(platform_id, None)
                 self.failures[platform_id] = "启动失败，请检查平台配置"
                 raise
+
+    async def deliver_queries(self, platform_id: str) -> None:
+        entry = self.entries.get(platform_id)
+        if not entry or not entry.enabled:
+            return
+        async with entry.runtime.store.transaction() as db:
+            completed = await rows(
+                db,
+                "SELECT id,context_json,result FROM query_jobs WHERE status='complete' AND notified_at=0 AND next_at<=? "
+                "AND json_extract(context_json,'$.binding_id') IS NOT NULL AND json_extract(context_json,'$.binding_id')!='web' "
+                "AND COALESCE(json_extract(context_json,'$.delivery_stopped'),0)=0 AND json_extract(context_json,'$._scope')=? ORDER BY next_at LIMIT 5",
+                (time.time(), entry.runtime.query_engine.jobs.scope),
+            )
+        for item in completed:
+            context = json.loads(item["context_json"])
+            if (
+                context.get("delivery_stopped")
+                or context.get("_scope") != entry.runtime.query_engine.jobs.scope
+            ):
+                continue
+            binding = context.get("binding_id", "")
+            if binding == "web" or not binding:
+                continue
+            gateway = next(
+                (
+                    bot
+                    for bot in entry.bots
+                    if bot.namespace == "binding:" + binding + ":" and bot.authenticated
+                ),
+                None,
+            )
+            if not gateway:
+                async with entry.runtime.store.transaction() as db:
+                    await db.execute(
+                        "UPDATE query_jobs SET next_at=? WHERE id=? AND notified_at=0",
+                        (time.time() + 60, item["id"]),
+                    )
+                continue
+            try:
+                current = await self.control.binding(platform_id, binding)
+            except ControlError:
+                continue
+            if not current["enabled"]:
+                continue
+            conversation = context.get("conversation_id", "")
+            if not conversation.startswith(("group:", "single:")):
+                continue
+            chatid = conversation.split(":", 1)[1]
+            if not chatid:
+                continue
+            result = json.loads(item["result"])
+            summary = result["summary"]
+            text = (
+                f"查询任务已完成 · {item['id']}\n消费记录：{summary['success_records']:,}\n"
+                f"错误记录：{summary['error_records']:,}\n消耗：{summary['quota']:,} quota\n"
+                f"已读取：{result['records_read']:,} 条\n可回复“任务 {item['id']}”查看结果。"
+            )
+            if result.get("unknown_status_records"):
+                text += f"\n注意：{result['unknown_status_records']} 条错误状态码未知，当前匹配数不代表全部。"
+            try:
+                await gateway.send_task_result(chatid, text)
+            except Exception:
+                # SDK boundary: failed delivery must not become a channel-health alert.
+                failures = int(context.get("delivery_failures", 0)) + 1
+                context["delivery_failures"] = failures
+                if failures >= 3:
+                    context["delivery_stopped"] = True
+                async with entry.runtime.store.transaction() as db:
+                    await db.execute(
+                        "UPDATE query_jobs SET context_json=?,next_at=? WHERE id=? AND notified_at=0",
+                        (
+                            json.dumps(context),
+                            time.time() + (86400 if failures >= 3 else 60 * failures),
+                            item["id"],
+                        ),
+                    )
+                logger.warning("query_delivery_unconfirmed task=%s", item["id"])
+                return
+            async with entry.runtime.store.transaction() as db:
+                await db.execute(
+                    "UPDATE query_jobs SET notified_at=? WHERE id=? AND status='complete' AND notified_at=0",
+                    (time.time(), item["id"]),
+                )
+            return
 
     def entry(self, platform_id: str) -> Entry:
         if platform_id not in self.entries:

@@ -49,6 +49,7 @@ export interface Rank extends Metrics {
   label: string;
 }
 export interface Statistics {
+  unavailable_metrics?: string[];
   summary: Metrics;
   ranking: Rank[];
   channel_leaders: Rank[];
@@ -281,4 +282,38 @@ export interface MonitorExecution {
   queue: Record<string, number>;
   mode: string;
   business_logs_persisted: boolean;
+}
+export interface QueryTask {
+  id: string;
+  status:
+    | "queued"
+    | "running"
+    | "waiting"
+    | "paused"
+    | "failed"
+    | "complete"
+    | "cancelled";
+  query: {
+    start: string;
+    end: string;
+    dimension: string;
+    metric: string;
+    status_codes?: number[];
+  };
+  progress: {
+    records_read: number;
+    total_requests: number;
+    restarts: number;
+    from_timestamp?: number;
+    through_timestamp?: number;
+  };
+  result: Statistics | null;
+  error: string;
+  next_at?: number;
+  notified_at?: number;
+}
+export interface PendingStatistics {
+  pending: true;
+  task: QueryTask;
+  limitation: string;
 }

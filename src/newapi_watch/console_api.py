@@ -24,6 +24,7 @@ from .control_models import BindingInput, BindingPatch, PlatformInput, PlatformP
 from .control_store import ControlError, ControlStore
 from .fleet import Fleet
 from .model_provider import Provider
+from .operations import OperationError
 from .periods import StatisticsQuery
 from .transport import RequestLimits
 from .upstream_throttle import UpstreamRateLimited
@@ -58,6 +59,10 @@ def create_console(
 
     @app.exception_handler(ControlError)
     async def control_error(request: Request, exc: ControlError) -> JSONResponse:
+        return JSONResponse(envelope(message=str(exc), code=exc.status), status_code=exc.status)
+
+    @app.exception_handler(OperationError)
+    async def operation_error(request: Request, exc: OperationError) -> JSONResponse:
         return JSONResponse(envelope(message=str(exc), code=exc.status), status_code=exc.status)
 
     @app.exception_handler(ValueError)

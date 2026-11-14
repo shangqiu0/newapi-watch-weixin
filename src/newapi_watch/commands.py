@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from datetime import date, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -57,6 +58,8 @@ class Commands:
         self.operations = Operations(store)
         self.audits = Audit(settings, store)
         self.health = Health(settings, store)
+        self.query_engine: Any = None
+        self.error_search: Any = None
         self.live_queries = False
         self.data = DataQueries(settings, store, client, reports)
 

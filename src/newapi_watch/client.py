@@ -10,7 +10,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import Channel, LogPage, LogRecord, ProbeResult, UserInfo
+from .models import Channel, LogPage, LogRecord, ProbeResult, UsageCounters, UserInfo
 from .redaction import redact_text
 from .upstream_throttle import RequestThrottle
 from .upstream_throttle import UpstreamError as UpstreamError
@@ -117,6 +117,82 @@ class NewAPIClient:
             return [Channel.model_validate(item) for item in records]
         except ValidationError:
             raise UpstreamError("NewAPI 渠道字段不兼容") from None
+
+    async def channel(self, channel_id: int) -> Channel:
+        if channel_id <= 0:
+            raise ValueError("渠道ID必须大于0")
+        payload = await self.request(f"/api/channel/{channel_id}")
+        try:
+            channel = Channel.model_validate(payload.get("data"))
+            if channel.id != channel_id:
+                raise ValueError("渠道ID不匹配")
+            return channel
+        except (ValidationError, ValueError):
+            raise UpstreamError("NewAPI 单渠道信息不兼容或ID不匹配") from None
+
+    async def usage_counters(self, start: int, end: int) -> UsageCounters:
+        payload = await self.request(
+            "/api/log/stat",
+            {
+                "start_timestamp": start,
+                "end_timestamp": end - 1,
+                "type": 2,
+            },
+        )
+        try:
+            return UsageCounters.model_validate(payload.get("data"))
+        except ValidationError:
+            raise UpstreamError("NewAPI 汇总接口字段不兼容，不能将缺失额度当作零消耗") from None
+
+    async def query_log_page(
+        self,
+        start: int,
+        end: int,
+        *,
+        page: int,
+        page_size: int,
+        log_type: int = 0,
+        channel_id: int = 0,
+    ) -> LogPage:
+        """Read only the requested page, distinct from complete report scans."""
+        if start < 0 or end <= start or page < 1 or not 1 <= page_size <= 100:
+            raise ValueError("日志查询范围或分页参数无效")
+        payload = await self.request(
+            "/api/log/",
+            {
+                "start_timestamp": start,
+                "end_timestamp": end - 1,
+                "p": page,
+                "page_size": page_size,
+                "type": log_type,
+                "channel": channel_id,
+            },
+        )
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise UpstreamError("平台不支持分页日志查询；未回退为全窗口扫描")
+        total, size = data.get("total"), data.get("page_size", page_size)
+        if type(total) is not int or total < 0 or type(size) is not int or size != page_size:
+            raise UpstreamError("平台日志分页总数或分页大小不兼容")
+        if not all(isinstance(item, dict) for item in data["items"]):
+            raise UpstreamError("平台日志分页字段无效")
+        try:
+            items = [self.safe_log(item) for item in data["items"]]
+        except (ValidationError, TypeError, ValueError):
+            raise UpstreamError("平台日志分页字段无效") from None
+        if len(items) > page_size or len({r.id for r in items}) != len(items) or len(items) > total:
+            raise UpstreamError("平台日志分页重复或数量无效")
+        if any(
+            not start <= r.created_at < end
+            or (log_type and r.type != log_type)
+            or (channel_id and r.channel_id != channel_id)
+            for r in items
+        ):
+            raise UpstreamError("平台日志接口未遵守时间/类型/渠道筛选，本页未作为有效结果返回")
+        expected = min(page_size, max(0, total - (page - 1) * page_size))
+        if len(items) != expected:
+            raise UpstreamError("平台日志分页不完整，未将缺失记录当作零记录")
+        return LogPage(items=items, total=total, page_size=page_size)
 
     async def logs(self, start: int, end: int, *, log_type: int = 0) -> list[LogRecord]:
         records = await self.pages(

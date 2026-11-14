@@ -28,6 +28,7 @@ export default {
     page("channels", "Channels", "渠道状态", Server),
     page("logs", "Logs", "请求日志", Logs),
     page("users", "Users", "用户额度", Users),
+    page("tasks", "QueryTasks", "查询任务", Policies),
     page("statistics", "Statistics", "按需统计", Reports),
     page("alerts", "Alerts", "告警记录", Bell),
     page("notifications", "Notifications", "通知投递", Bell),

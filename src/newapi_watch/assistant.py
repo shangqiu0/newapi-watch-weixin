@@ -60,6 +60,37 @@ class Assistant:
             return CommandResult(
                 text=f"你好！我是「{self.platform_name}」的运维助手。你想看看哪些渠道需要注意，还是查一下用量？直接说就好。"
             )
+        if self.commands.query_engine is not None and (
+            match := re.fullmatch(r"任务\s+(q_[a-f0-9]{32})", text)
+        ):
+            owner = (
+                "console"
+                if self.binding_id == "web"
+                else f"{self.platform_id}:{self.binding_id}:{conversation_id}:{actor}"
+            )
+            try:
+                task = await self.commands.query_engine.jobs.get(match[1], owner)
+                labels = {
+                    "queued": "等待执行",
+                    "running": "正在读取",
+                    "waiting": "限流等待",
+                    "paused": "已暂停",
+                    "complete": "已完成",
+                    "cancelled": "已取消",
+                    "failed": "失败",
+                }
+                text = f"查询任务 {task['id']}：{labels.get(task['status'], task['status'])}，已读取 {task['progress'].get('records_read', 0):,} 条。"
+                if task["status"] == "complete" and task.get("result"):
+                    summary = task["result"]["summary"]
+                    text += f"\n消费记录：{summary['success_records']:,} · 错误记录：{summary['error_records']:,}\n消耗：{summary['quota']:,} quota · Token：{summary['tokens']:,}"
+                    text += "\n排行：" + "；".join(
+                        f"{i['label']} {i['quota']:,} quota" for i in task["result"]["ranking"][:5]
+                    )
+                else:
+                    text += "\n" + task["error"]
+                return self._redact_result(CommandResult(text=text))
+            except ValueError:
+                return CommandResult(text="任务不存在或不属于当前机器人会话", ok=False)
         if text in {"帮助", "help"}:
             return CommandResult(text=HELP)
         # Only explicit local management actions bypass the model. No read query
@@ -79,7 +110,7 @@ class Assistant:
             )
             if "功能" in text or "能做" in text:
                 result.text = f"我是「{self.platform_name}」的运维助手。" + result.text
-            return result
+            return self._redact_result(result)
         if self.active >= 4:
             return CommandResult(text="当前问答较多，请稍后再试；监控仍在正常运行。", ok=False)
         self.active += 1
@@ -104,7 +135,12 @@ class Assistant:
                     "智能表达暂时不可用，我先根据已采集数据回答：",
                     "模型鉴权暂未通过，我先按本平台快照说明：",
                 )
-            return result
+            elif error.code in {"wrong_endpoint", "group_unavailable"}:
+                result.text = result.text.replace(
+                    "智能表达暂时不可用，我先根据已采集数据回答：",
+                    str(error) + "我先尝试返回指定数据：",
+                )
+            return self._redact_result(result)
         except (
             httpx.HTTPError,
             ValueError,
@@ -122,10 +158,15 @@ class Assistant:
                 source=source,
                 request_id=request_id,
             )
-            result.text = redact_text(result.text, self.commands.settings)
-            return result
+            return self._redact_result(result)
         finally:
             self.active -= 1
+
+    def _redact_result(self, result: CommandResult) -> CommandResult:
+        result.text = redact_text(result.text, self.commands.settings).replace(
+            self.config.api_key.get_secret_value() or "\x00", "[REDACTED]"
+        )
+        return result
 
     async def _ask(self, text: str, actor: str, conversation_id: str) -> CommandResult:
         key = hashlib.sha256(
@@ -140,7 +181,17 @@ class Assistant:
             *previous,
             {"role": "user", "content": text},
         ]
-        tools = Tools(self.commands)
+        context = {
+            "binding_id": self.binding_id,
+            "conversation_id": conversation_id,
+            "actor": actor,
+        }
+        owner = (
+            "console"
+            if self.binding_id == "web"
+            else f"{self.platform_id}:{self.binding_id}:{conversation_id}:{actor}"
+        )
+        tools = Tools(self.commands, owner=owner, context=context)
         final = ""
         for _ in range(10):
             message = await Provider(self.config, self.http).complete(
@@ -180,6 +231,27 @@ class Assistant:
             for call in calls:
                 function = call["function"]
                 result = await tools.call(function["name"], function["arguments"])
+                if (
+                    result.get("ok")
+                    and result.get("pending")
+                    and isinstance(result.get("task"), dict)
+                ):
+                    task = result["task"]
+                    await self.commands.store.set_meta(
+                        "llm_diagnostic",
+                        json.dumps(
+                            {
+                                "ok": True,
+                                "code": "ready",
+                                "message": "模型工具调用成功，历史查询已受理",
+                                "checked_at": time.time(),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    return CommandResult(
+                        text=f"查询任务已受理：{task['id']}\n我会在后台分批读取并保存进度，不占用本次聊天等待。完成后会尝试回到原会话通知；也可回复“任务 {task['id']}”查看。\n未完成前不会把部分数据当作完整统计。"
+                    )
                 content = json.dumps(result, ensure_ascii=False)
                 model_key = self.config.api_key.get_secret_value()
                 if model_key:

@@ -59,6 +59,13 @@ class UserInfo(BaseModel):
     group: str = ""
 
 
+class UsageCounters(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    quota: int = Field(strict=True, ge=0)
+    rpm: int | None = Field(default=None, strict=True, ge=0)
+    tpm: int | None = Field(default=None, strict=True, ge=0)
+
+
 class ProbeResult(BaseModel):
     success: bool
     time: float = 0

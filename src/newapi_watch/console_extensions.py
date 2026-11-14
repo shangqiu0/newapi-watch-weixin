@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from .control_models import PlatformPatch
@@ -20,6 +20,7 @@ from .monitoring.service import preview
 from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .persistence import row, rows
+from .query_engine.api import query_routes
 
 
 class MonitorRunInput(BaseModel):
@@ -39,6 +40,8 @@ def console_extensions(
     control: ControlStore, fleet: Fleet, session: Callable[..., Any]
 ) -> APIRouter:
     router = APIRouter(prefix="/console/api/platforms", dependencies=[Depends(session)])
+
+    router.include_router(query_routes(fleet))
 
     def wrap(data: Any) -> dict[str, Any]:
         return {"code": 0, "message": "success", "data": data}
@@ -129,20 +132,29 @@ def console_extensions(
             }
         )
 
+    @router.post("/{platform_id}/statistics-queries")
     @router.get("/{platform_id}/statistics")
     async def statistics(
         platform_id: str,
+        request: Request,
         period: str = Query("近7天", max_length=32),
         dimension: Literal["model", "channel", "user"] = "model",
         metric: Literal["quota", "calls", "errors", "tokens"] = "quota",
         live: bool = True,
+        exact: bool = False,
     ) -> dict[str, Any]:
         runtime = entry(platform_id).runtime
         bounds = parse_period(
             period, today=datetime.now(ZoneInfo(runtime.settings.timezone)).date()
         )
         query = StatisticsQuery(**bounds.model_dump(), dimension=dimension, metric=metric, limit=20)
-        return wrap(await runtime.commands.data.statistics(query, live=live))
+        if live:
+            return wrap(
+                await runtime.query_engine.statistics(
+                    query, "console", exact=exact, allow_tasks=request.method == "POST"
+                )
+            )
+        return wrap(await runtime.commands.data.statistics(query, live=False))
 
     @router.get("/{platform_id}/logs")
     async def logs(
@@ -154,12 +166,24 @@ def console_extensions(
         log_type: int = Query(0, ge=0, le=5),
         channel_id: int = Query(0, ge=0),
         http_status: int = Query(0, ge=0, le=599),
+        cursor: str = Query("", max_length=64),
     ) -> dict[str, Any]:
         runtime = entry(platform_id).runtime
         bounds = parse_period(
             period, today=datetime.now(ZoneInfo(runtime.settings.timezone)).date()
         )
         start, end = bounds.window(runtime.settings.timezone)
+        if live and (http_status or cursor):
+            return wrap(
+                await runtime.error_search.search(
+                    start,
+                    end,
+                    owner="console",
+                    status=http_status,
+                    channel=channel_id,
+                    cursor=cursor,
+                )
+            )
         if live:
             return wrap(
                 await runtime.commands.data.logs(
