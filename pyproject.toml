@@ -47,5 +47,5 @@ strict = true
 files = ["src/newapi_watch"]
 
 [[tool.mypy.overrides]]
-module = ["aibot.*", "matplotlib.*"]
+module = ["aibot.*", "matplotlib.*", "redis.*"]
 ignore_missing_imports = true
