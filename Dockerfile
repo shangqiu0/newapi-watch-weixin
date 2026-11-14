@@ -10,6 +10,7 @@ RUN pnpm build
 FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/matplotlib
 WORKDIR /app
+# The hashed runtime export includes the optional Redis client for the bundled Compose cache.
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && pip install --no-cache-dir setuptools==84.1.0 \

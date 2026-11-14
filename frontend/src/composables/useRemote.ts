@@ -1,6 +1,9 @@
 import { ref, watch, onScopeDispose, shallowRef } from "vue";
 import { request } from "@/api/console";
-export function useRemote<T>(path: () => string) {
+export function useRemote<T>(
+  path: () => string,
+  method: "GET" | "POST" = "GET"
+) {
   const data = shallowRef<T | null>(null),
     loading = ref(false),
     error = ref("");
@@ -20,7 +23,7 @@ export function useRemote<T>(path: () => string) {
     }
     loading.value = true;
     try {
-      const result = await request<T>(url, "GET", undefined, signal);
+      const result = await request<T>(url, method, undefined, signal);
       if (seq === generation) data.value = result;
     } catch (e) {
       if (seq === generation && !signal.aborted)

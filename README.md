@@ -221,20 +221,51 @@ Invoke-RestMethod http://127.0.0.1:8088/api/v1/commands -Method Post -Headers $h
 - dead可通过 `通知 死信` 或受保护接口查看；核查原因后使用 `通知 重试 <ID>` 单条重新入队，持久化幂等、保留发送限速，不自动无限重发。历史文字通知会加重试标记，重发图片仍为原始历史图片。
 - 完整实时性依赖接口可用、企微限额和网络；不承诺任何情况下“秒级必达”。
 
-## 6. Docker
+## 6. Docker / Redis Compose
 
-```powershell
-Copy-Item .env.example .env
-# 编辑 .env 后
-# 本项目已完成本机Docker构建及DEMO容器验收；真实平台仍需配置凭证后联调。
-docker compose up -d --build
+已提供独立 Redis 容器：`compose.yaml` 启动 `watch` 与 `redis`，`compose.console.yaml` 切换为当前多平台网页管理台。**这里只准备部署配置；本轮没有构建或发布新的应用镜像。**
+
+### 推荐：多平台网页管理台（服务器部署时执行）
+
+```bash
+# 仅首次复制，不覆盖已有.env
+[ -f .env ] || cp .env.example .env
+
+# 构建当前源码镜像，生产依赖已包括Redis Python客户端
+# 后续在服务器准备好部署时再执行，不是日常开发命令
+docker compose -f compose.yaml -f compose.console.yaml build watch
+
+# 仅首次初始化管理员；数据库和密钥写入watch-data卷，不会启动机器人
+# 已有data/console管理数据时不要重复初始化
+docker compose -f compose.yaml -f compose.console.yaml run --rm --no-deps watch console-init --control-dir /app/data/console --username admin
+
+# 初始密码只写入卷内文件；在自己的服务器终端读取并妥善保管
+# 不要将输出发到群聊或提交到仓库
+docker compose -f compose.yaml -f compose.console.yaml run --rm --no-deps --entrypoint cat watch /app/data/console/initial-account.txt
+
+# 一起启动网页管理台与Redis
+docker compose -f compose.yaml -f compose.console.yaml up -d
 ```
 
-Compose 只映射到宿主127.0.0.1；需要 NewAPI 回调时，请自行配置可信反向代理/TLS，仅开放必要事件路径，不公开整个运维 API。容器非root、只读根文件系统，数据使用独立卷。
+网页仅监听宿主 `127.0.0.1:8088`。生产通过 HTTPS 反向代理访问；管理台默认安全Cookie，**不要为了公网HTTP关闭Cookie安全保护**。首次登录后在网页新增平台、模型和机器人，网页配置保存在加密控制数据库中，不需要把各平台凭证全部写进 `.env`。
 
-**必须单实例、单worker。** 不要用多副本争抢同一个企微机器人连接，也不要让两套服务共用一个SQLite数据库。不同 NewAPI 实例或 DEMO/生产必须使用不同数据库；程序有实例绑定防止混用。切换实例不要直接覆盖原数据库。
+### Redis默认行为
 
-升级只重建/重启此服务，保留卷；不操作 NewAPI。备份SQLite应使用在线backup或停止监控后整体备份（含WAL状态），不要运行中只复制主文件。当前schema v2，首次启动对v1自动进行增量迁移；升级前先备份，旧程序拒绝打开更高schema版本。降级须恢复升级前数据库备份，不要删除生产数据或强改user_version。
+- 官方 Redis 镜像使用已验证版本与内容摘要固定，不使用浮动 `latest`；升级时需重新验证并更新镜像引用。
+- 自动连接 `redis://redis:6379/0`，无需手动安装Redis或开放6379端口。
+- Redis仅接入专用 `internal` 缓存网络；只有应用同时接入缓存网络和可出站网络。
+- 启动时等待Redis健康；运行中Redis不可用时应用仍可回退内存缓存，任务进度由SQLite保存。
+- 缓存上限128MB、容器内存上限256MB，采用LRU淘汰；关闭RDB/AOF，缓存可丢弃，不新增Redis持久化卷。
+- `watch-data` 卷仍保留监控数据库、任务进度、控制台密钥和账号，不能与缓存一起清空。
+- 如需外部Redis，可在 `.env` 设置 `WATCH_QUERY_REDIS_URL`；显式设置为空字符串可关闭应用Redis缓存。Compose仍会创建内置Redis容器；外部Redis的安全与认证需自行配置。
+
+### 保留旧的单平台模式
+
+`docker compose up -d --build` 不加覆盖文件时，仍沿用镜像的旧 `serve` 启动命令；必须先填写该模式需要的 `.env` 凭证。**当前多平台查询任务功能请使用上面的Console组合。**
+
+**必须单实例、单worker。** Redis只是缓存，不是多实例调度器；不要让多副本争抢同一个企微机器人连接或共用同一个SQLite数据库。
+
+后续升级只重建/重启监控服务，不操作NewAPI。当前平台业务数据库schema为v6，控制台数据库schema为v2；升级前先备份，回滚旧程序需恢复升级前的数据。`docker compose down`默认保留数据卷；不要随意添加 `-v`。更完整的Linux部署、日志排查和备份说明见 [Docker Compose部署说明](docs/部署-Docker-Compose.md)。
 
 ## 7. 二次开发
 

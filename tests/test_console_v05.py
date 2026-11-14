@@ -318,3 +318,32 @@ async def test_manual_delivery_is_distinguished_from_real_webhook_receipt(api):
     item = response.json()["data"]["items"][0]
     assert item["status"] == "sent" and item["delivery_method"] == "manual"
     assert "未实际发送" in item["last_error"]
+
+
+async def test_alert_preview_uses_platform_log_timezone_and_omits_removed_rows(api):
+    from newapi_watch.control_models import PlatformPatch
+
+    http, control, fleet = api
+    platform = await ready(api)
+    await control.patch_platform(platform["id"], PlatformPatch(timezone="UTC"))
+    await fleet.reload(platform["id"])
+    response = await http.post(
+        f"/console/api/platforms/{platform['id']}/alert-previews",
+        json={
+            "rule": {
+                "template": "渠道异常告警\n错误码：{error_code}\n告警时间：{time}（北京时间）\n错误日志时间：{log_time}（北京时间）"
+            },
+            "sample": {
+                "log_id": 123456,
+                "log_created_at": 1794627249,
+                "upstream_request_id": "upstream-preview",
+            },
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["sends_messages"] is False
+    assert "错误日志时间：2026年11月14日 03:34:09" in data["text"]
+    assert "日志 ID：123456" in data["text"]
+    assert "错误码：" not in data["text"] and "告警时间：" not in data["text"]
+    assert "北京时间" not in data["text"]

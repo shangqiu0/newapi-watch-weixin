@@ -2,6 +2,7 @@
 
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, SecretStr
 
 
 def plaintext(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
     if isinstance(value, SecretStr):
         return value.get_secret_value()
     if isinstance(value, BaseModel):

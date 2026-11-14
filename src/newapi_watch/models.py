@@ -39,6 +39,8 @@ class LogRecord(BaseModel):
     error_code: str = Field(default="", max_length=256)
     error_message: str = Field(default="", max_length=2000)
     channel_name: str = Field(default="", max_length=512)
+    request_id: str = Field(default="", max_length=128)
+    upstream_request_id: str = Field(default="", max_length=128)
 
 
 class LogPage(BaseModel):
@@ -57,6 +59,13 @@ class UserInfo(BaseModel):
     request_count: int = 0
     status: int = 0
     group: str = ""
+
+
+class UsageCounters(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    quota: int = Field(strict=True, ge=0)
+    rpm: int | None = Field(default=None, strict=True, ge=0)
+    tpm: int | None = Field(default=None, strict=True, ge=0)
 
 
 class ProbeResult(BaseModel):

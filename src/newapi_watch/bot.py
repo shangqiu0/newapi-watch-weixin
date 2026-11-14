@@ -168,6 +168,16 @@ class BotGateway:
     def _error(self, *args: Any) -> None:
         logger.error("wecom_error")
 
+    async def send_task_result(self, chatid: str, text: str) -> None:
+        if not self.authenticated or self.client is None:
+            raise RuntimeError("机器人当前未连接")
+        async with asyncio.timeout(10):
+            receipt = await self.client.send_message(
+                chatid, {"msgtype": "markdown", "markdown": {"content": truncate_utf8(text, 12000)}}
+            )
+        if not isinstance(receipt, dict) or receipt.get("errcode") != 0:
+            raise RuntimeError("任务结果消息未确认投递")
+
     async def run(self) -> None:
         self.client = WSClient(
             WSClientOptions(

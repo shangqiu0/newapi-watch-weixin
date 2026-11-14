@@ -56,6 +56,19 @@ class DataQueries:
             ),
         }
 
+    async def channel(self, channel_id: int) -> dict[str, Any]:
+        item = await self.client.channel(channel_id)
+        now = time.time()
+        return {
+            "items": [item.model_dump()],
+            "total": 1,
+            "complete": True,
+            "source": "newapi_admin_api",
+            "queried_at": now,
+            "collected_at": now,
+            "fresh": True,
+        }
+
     async def window(
         self, start: int, end: int, *, force: bool = False
     ) -> tuple[list[LogRecord], int]:
@@ -113,6 +126,40 @@ class DataQueries:
         channel_id: int = 0,
         http_status: int = 0,
     ) -> dict[str, Any]:
+        # Status-code filtering is not supported by NewAPI's list endpoint.
+        # Preserve its complete-window path rather than inventing a filtered total.
+        if not http_status:
+            through = min(end, int(time.time()) + 1)
+            try:
+                async with asyncio.timeout(45):
+                    result = await self.client.query_log_page(
+                        start,
+                        through,
+                        page=page,
+                        page_size=page_size,
+                        log_type=log_type,
+                        channel_id=channel_id,
+                    )
+            except TimeoutError:
+                raise UpstreamError(
+                    "平台日志单页查询超过45秒，请稍后重试；未扫描全部日志"
+                ) from None
+            total = result.total
+            assert total is not None  # validated by the adapter
+            has_more = page * page_size < total
+            return {
+                "items": [item.model_dump() for item in result.items],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "source": "newapi_admin_api",
+                "complete": page == 1 and not has_more,
+                "page_complete": True,
+                "has_more": has_more,
+                "through_timestamp": through - 1,
+                "timezone": self.settings.timezone,
+                "limitation": "仅返回所请求页；total为上游声明总数，非全窗口扫描或一致性快照，不可据本页计算全量统计",
+            }
         records, through = await self.window(start, end)
         selected = sorted(
             (
@@ -134,6 +181,27 @@ class DataQueries:
             "complete": True,
             "through_timestamp": through,
             "timezone": self.settings.timezone,
+        }
+
+    async def usage_summary(self, query: StatisticsQuery) -> dict[str, Any]:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        query.reject_future(datetime.now(ZoneInfo(self.settings.timezone)).date())
+        start, end = query.window(self.settings.timezone)
+        through = min(end, int(time.time()) + 1)
+        result = await self.client.usage_counters(start, through)
+        return {
+            "source": "newapi_admin_api_aggregate",
+            "quota": result.quota,
+            "rpm_last_minute": result.rpm,
+            "tpm_last_minute": result.tpm,
+            "from_timestamp": start,
+            "through_timestamp": through - 1,
+            "timezone": self.settings.timezone,
+            "queried_at": time.time(),
+            "unit": "quota原始单位，非货币",
+            "limitation": "quota为指定时间范围的上游消费汇总；RPM/TPM仅指查询时最近60秒，非所选窗口总次数/Token；不包含排名、错误数、活跃用户或趋势，缺失指标不可推算",
         }
 
     async def statistics(self, query: StatisticsQuery, *, live: bool = True) -> dict[str, Any]:

@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .analytics import Snapshot
 from .client import UpstreamError
 from .commands import Commands
+from .money import decorate_money
+from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .redaction import redact_data
 
@@ -23,6 +25,10 @@ class ChannelListArgs(NoArgs):
     page_size: int = Field(default=100, ge=1, le=100)
 
 
+class UpstreamArgs(NoArgs):
+    account_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
 class ChannelArgs(NoArgs):
     channel_id: int = Field(gt=0)
 
@@ -32,11 +38,24 @@ class UserArgs(ChannelListArgs):
 
 
 class ErrorArgs(ChannelListArgs):
+    http_status: int = Field(default=0, ge=0, le=599)
+    cursor: str = Field(default="", max_length=64)
     period: str = Field(default="今天", max_length=32)
     channel_id: int = Field(default=0, ge=0)
 
 
+class UsageArgs(NoArgs):
+    period: str = Field(default="今天", max_length=32)
+
+
+class TaskArgs(NoArgs):
+    chart: bool = False
+    task_id: str = Field(pattern=r"^q_[a-f0-9]{32}$")
+
+
 class StatsArgs(NoArgs):
+    status_codes: list[int] = Field(default_factory=list, max_length=50)
+    exact: bool = False
     period: str = Field(default="今天", max_length=32)
     dimension: str = Field(default="model", pattern="^(model|channel|user)$")
     metric: str = Field(default="quota", pattern="^(quota|calls|errors|tokens)$")
@@ -50,16 +69,32 @@ SCHEMAS: dict[str, tuple[type[BaseModel], str]] = {
     ),
     "get_channel": (ChannelArgs, "查询当前平台单渠道详情，不触发探测"),
     "search_users": (UserArgs, "查询当前平台指定用户额度和用量，不返回凭证"),
+    "get_usage_summary": (
+        UsageArgs,
+        "快速查询指定日期的总消耗quota，使用上游汇总接口，不扫描日志；只问总消耗时优先使用。不提供排名/图表/总调用数或总Token。",
+    ),
     "get_statistics": (StatsArgs, "当前平台今天/昨天/近7天/近30天统计排行，可附图，最多31天"),
+    "get_query_task": (TaskArgs, "查询当前机器人当前会话创建的后台任务进度与完整结果"),
     "get_errors": (ErrorArgs, "当前平台指定日期范围的错误日志摘要，不返回原始敏感正文"),
     "get_alerts": (ChannelListArgs, "当前平台最近告警和确认状态"),
     "get_capabilities": (NoArgs, "说明本机器人可查询和统计的能力"),
+    "get_upstream_accounts": (
+        NoArgs,
+        "列出当前机器人被授权的上游普通用户账户，仅含元信息，不查询其他平台",
+    ),
+    "get_upstream_balance": (
+        UpstreamArgs,
+        "通过上游自身账户接口实时查询已绑定账户的余额和已用金额，不能查询其他用户",
+    ),
 }
 
 
 class Tools:
-    def __init__(self, commands: Commands) -> None:
+    def __init__(
+        self, commands: Commands, *, owner: str = "console", context: dict[str, str] | None = None
+    ) -> None:
         self.commands = commands
+        self.owner, self.context = owner, context or {}
         self.image: bytes | None = None
         self.used: list[str] = []
         self.successful: list[str] = []
@@ -88,6 +123,8 @@ class Tools:
             result = await self._dispatch(name, parsed.model_dump())
             if result.get("ok") is True:
                 self.successful.append(name)
+            if not name.startswith("get_upstream_"):
+                result = decorate_money(result, self.commands.settings.currency)
             safe: dict[str, Any] = redact_data(result, self.commands.settings)
             return safe
         except UpstreamError as error:
@@ -98,16 +135,29 @@ class Tools:
                 "source": "newapi_admin_api",
                 "complete": False,
             }
+        except OperationError as error:
+            return {"ok": False, "error": str(error), "status": error.status, "complete": False}
         except (ValidationError, ValueError):
             return {"ok": False, "error": "参数无效；只允许当前绑定平台，不接受平台ID"}
 
     async def _dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if name in {"get_channels", "get_channel"}:
+        if name.startswith("get_upstream_"):
+            service = self.commands.upstream
+            if service is None:
+                return {"ok": False, "error": "当前未配置上游账户"}
+            binding = self.context.get("binding_id", "web")
+            if name == "get_upstream_accounts":
+                return {
+                    "ok": True,
+                    "items": [a.public() for a in service.visible(binding)],
+                    "source": "configured_upstream_accounts",
+                }
+            return {"ok": True, **await service.query(args["account_id"], binding_id=binding)}
+        if name == "get_channel":
+            return {"ok": True, **await self.commands.data.channel(args["channel_id"])}
+        if name == "get_channels":
             result = await self.commands.data.channels()
             items = result["items"]
-            if name == "get_channel":
-                items = [item for item in items if item["id"] == args["channel_id"]]
-                return {**result, "ok": bool(items), "items": items}
             page, size = args["page"], args["page_size"]
             return {
                 **result,
@@ -136,6 +186,11 @@ class Tools:
                 "collected_at": time.time(),
                 "unit": "quota原始单位，非货币",
             }
+        if name == "get_usage_summary":
+            today = datetime.now(ZoneInfo(self.commands.settings.timezone)).date()
+            period = parse_period(args["period"], today=today)
+            query = StatisticsQuery(**period.model_dump())
+            return {"ok": True, **await self.commands.data.usage_summary(query)}
         if name == "get_statistics":
             today = datetime.now(ZoneInfo(self.commands.settings.timezone)).date()
             period = parse_period(args["period"], today=today)
@@ -147,17 +202,56 @@ class Tools:
                     "limit": 10,
                 }
             )
-            result = await self.commands.data.statistics(query)
+            if self.commands.query_engine is not None:
+                result = await self.commands.query_engine.statistics(
+                    query,
+                    self.owner,
+                    exact=args.get("exact", False),
+                    context=self.context,
+                    status_codes=args.get("status_codes"),
+                )
+                if result.get("pending"):
+                    return {"ok": True, **result}
+            else:
+                result = await self.commands.data.statistics(query)
             snapshot = Snapshot.model_validate(result)
             if args["chart"]:
                 self.image = await self.commands.reports._image(
                     snapshot, "ranking" if args["dimension"] != "model" else "trend"
                 )
             return {"ok": True, **result, "window": query.model_dump(mode="json")}
+        if name == "get_query_task":
+            if self.commands.query_engine is None:
+                return {"ok": False, "error": "当前运行模式不支持后台查询"}
+            try:
+                task = await self.commands.query_engine.jobs.get(args["task_id"], self.owner)
+                if args.get("chart") and task["status"] == "complete" and task.get("result"):
+                    self.image = await self.commands.reports._image(
+                        Snapshot.model_validate(task["result"]), "trend"
+                    )
+                return {"ok": True, **task}
+            except ValueError:
+                return {"ok": False, "error": "任务不存在或不属于当前机器人会话"}
         if name == "get_errors":
             today = datetime.now(ZoneInfo(self.commands.settings.timezone)).date()
             period = parse_period(args["period"], today=today)
             start, end = period.window(self.commands.settings.timezone)
+            if args.get("http_status") or args.get("cursor"):
+                from .query_engine.error_search import ErrorSearch
+
+                if self.commands.error_search is None:
+                    self.commands.error_search = ErrorSearch(self.commands.data.client)
+                return {
+                    "ok": True,
+                    **await self.commands.error_search.search(
+                        start,
+                        end,
+                        owner=self.owner,
+                        status=args["http_status"],
+                        channel=args["channel_id"],
+                        cursor=args["cursor"],
+                    ),
+                }
             result = await self.commands.data.logs(
                 start,
                 end,

@@ -1,0 +1,12 @@
+# Opt-in multi-platform web console; the base file keeps the legacy serve command unchanged.
+# docker compose -f compose.yaml -f compose.console.yaml up -d --build
+services:
+  watch:
+    command:
+      - console
+      - --control-dir
+      - /app/data/console
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8088"

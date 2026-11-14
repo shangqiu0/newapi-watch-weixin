@@ -14,6 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+redis = ["redis==8.1.0"]
 dev = ["pytest==9.0.3", "pytest-asyncio==1.3.0", "pytest-cov==7.1.0", "ruff==0.17.4", "mypy==2.4.1", "pip-audit==2.10.1"]
 
 [project.scripts]
@@ -46,5 +47,5 @@ strict = true
 files = ["src/newapi_watch"]
 
 [[tool.mypy.overrides]]
-module = ["aibot.*", "matplotlib.*"]
+module = ["aibot.*", "matplotlib.*", "redis.*"]
 ignore_missing_imports = true

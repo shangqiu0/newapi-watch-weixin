@@ -6,7 +6,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from .money import CurrencyConfig
 from .monitoring.models import EventKind, MonitoringConfig
+from .upstream_accounts import UpstreamAccount
 
 
 def endpoint(value: str) -> str:
@@ -51,6 +53,8 @@ class PlatformInput(Input):
     log_seconds: float = Field(default=120, ge=30, le=7200)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
+    upstream_accounts: list[UpstreamAccount] = Field(default_factory=list, max_length=30)
 
     @field_validator("newapi_url")
     @classmethod
@@ -88,6 +92,8 @@ class PlatformPatch(Input):
     log_seconds: float | None = Field(default=None, ge=30, le=7200)
     llm: LLMConfig | None = None
     monitoring: MonitoringConfig | None = None
+    currency: CurrencyConfig | None = None
+    upstream_accounts: list[UpstreamAccount] | None = Field(default=None, max_length=30)
 
 
 class BindingInput(Input):
@@ -102,6 +108,7 @@ class BindingInput(Input):
             list[EventKind], ["channel", "request_error", "balance", "daily", "weekly", "service"]
         )
     )
+    notification_chat_id: str = Field(default="", max_length=256, pattern=r"^[^\s]*$")
     message_format: Literal["text", "markdown"] = "markdown"
     mention_all: bool = False
 
@@ -130,5 +137,6 @@ class BindingPatch(Input):
     bot_secret: SecretStr | None = None
     webhook_url: SecretStr | None = None
     events: list[EventKind] | None = None
+    notification_chat_id: str | None = Field(default=None, max_length=256, pattern=r"^[^\s]*$")
     message_format: Literal["text", "markdown"] | None = None
     mention_all: bool | None = None

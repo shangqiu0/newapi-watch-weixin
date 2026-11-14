@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
 import type { Channel, Page } from "@/api/types";
-import { number, statusNames, timeCN } from "@/utils/format";
+import { number, quotaText, statusNames, timeCN } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import StatusDot from "@/components/Console/StatusDot.vue";
 const store = usePlatformStore(),
@@ -147,8 +147,8 @@ function details(row: Channel) {
           >{{ selected.priority ?? "—" }} /
           {{ selected.weight ?? "—" }}</el-descriptions-item
         >
-        <el-descriptions-item label="累计消耗 quota">{{
-          number(selected.used_quota)
+        <el-descriptions-item label="累计消耗（¥）">{{
+          quotaText(selected.used_quota, selected.used_quota_display)
         }}</el-descriptions-item>
         <el-descriptions-item label="最近测试">{{
           timeCN(selected.test_time || null, store.current?.timezone)

@@ -37,7 +37,7 @@ const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周�
         type="primary"
         :loading="state.saving.value"
         :disabled="!config"
-        @click="state.save"
+        @click="state.save()"
         >保存报告设置</el-button
       ></template
     ><el-alert

@@ -17,6 +17,7 @@ const form = reactive({
   enabled: false,
   bot_id: "",
   bot_secret: "",
+  notification_chat_id: "",
   webhook_url: "",
   events: [] as string[],
   message_format: "markdown" as "markdown" | "text",
@@ -46,6 +47,7 @@ function edit(binding?: Binding) {
       enabled: false,
       bot_id: "",
       bot_secret: "",
+      notification_chat_id: "",
       webhook_url: "",
       events: events.map(e => e[0]),
       message_format: "markdown",
@@ -56,6 +58,7 @@ function edit(binding?: Binding) {
           ...binding,
           bot_id: "",
           bot_secret: "",
+          notification_chat_id: binding.notification_chat_id ?? "",
           webhook_url: "",
           events: [...binding.events]
         }
@@ -72,7 +75,11 @@ async function save() {
       enabled: form.enabled,
       ...(!existing.value ? { kind: form.kind } : {}),
       ...(form.kind === "bot"
-        ? { bot_id: form.bot_id, bot_secret: form.bot_secret }
+        ? {
+            bot_id: form.bot_id,
+            bot_secret: form.bot_secret,
+            notification_chat_id: form.notification_chat_id
+          }
         : {
             webhook_url: form.webhook_url,
             events: form.events,
@@ -220,7 +227,16 @@ async function toggle(binding: Binding) {
               autocomplete="new-password"
               :placeholder="
                 existing ? '已保存，留空保留原值' : '填写机器人 Secret'
-              " /></el-form-item></template
+              " /></el-form-item
+          ><el-form-item label="余额主动提醒接收会话 ID（可选）"
+            ><el-input
+              v-model="form.notification_chat_id"
+              placeholder="在目标企微会话发送“会话ID”，复制返回值"
+            />
+            <p class="section-footnote">
+              仅用于显式绑定的上游余额提醒；留空则只支持聊天查询，不向所有会话广播。
+            </p></el-form-item
+          ></template
         ><template v-else
           ><el-form-item label="群 Webhook 地址"
             ><el-input

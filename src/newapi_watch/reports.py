@@ -73,7 +73,12 @@ class Reports:
             async with self.chart_lock:
                 worker = asyncio.create_task(
                     asyncio.to_thread(
-                        render, snapshot, kind, self.settings.chart_font, self.settings.demo
+                        render,
+                        snapshot,
+                        kind,
+                        self.settings.chart_font,
+                        self.settings.demo,
+                        self.settings.currency,
                     )
                 )
                 try:
@@ -89,17 +94,22 @@ class Reports:
     def _summary(self, snapshot: Snapshot, *, title: str) -> list[str]:
         stats = snapshot.summary
         labels = {"model": "模型", "channel": "渠道", "user": "用户"}
+        amount = (
+            self.settings.currency.display(stats.quota)
+            if self.settings.currency.confirmed
+            else f"{stats.quota} quota（原始单位，非货币）"
+        )
         lines = [
             f"**{'[DEMO] ' if self.settings.demo else ''}{title}**",
             f"时区：{snapshot.timezone}",
             f"数据覆盖：{'完整' if snapshot.coverage.complete else '不完整（首次采集、采集延迟、当日未结束或超出保留期）'}",
             f"成功记录：{stats.success_records} · 错误记录：{stats.error_records}",
-            f"消耗：{stats.quota} quota（原始单位，非货币） · Token：{stats.tokens}",
+            f"消耗：{amount} · Token：{stats.tokens}",
             f"活跃用户：{stats.active_users} · 活跃渠道：{stats.active_channels}",
             f"{labels[snapshot.query.dimension]}排行（按 {snapshot.query.metric}，最多{snapshot.query.limit}项）：",
         ]
         lines.extend(
-            f"#{index} {item.label} · quota {item.quota} · 成功 {item.success_records} · 错误 {item.error_records} · Token {item.tokens}"
+            f"#{index} {item.label} · 消耗 {self.settings.currency.display(item.quota)} · 成功 {item.success_records} · 错误 {item.error_records} · Token {item.tokens}"
             for index, item in enumerate(snapshot.ranking, 1)
         )
         if not snapshot.ranking:

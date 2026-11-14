@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from datetime import date, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -57,7 +58,10 @@ class Commands:
         self.operations = Operations(store)
         self.audits = Audit(settings, store)
         self.health = Health(settings, store)
+        self.query_engine: Any = None
+        self.error_search: Any = None
         self.live_queries = False
+        self.upstream: Any = None
         self.data = DataQueries(settings, store, client, reports)
 
     async def execute(
@@ -257,10 +261,10 @@ class Commands:
             raise ValueError("查询关键字过长")
         users = await self.data.users(keyword)
         return CommandResult(
-            text="**用户查询**（最多20条，quota 原始单位）\n"
+            text="**用户查询**（最多20条，按当前平台额度显示口径）\n"
             + (
                 "\n".join(
-                    f"#{item.id} {item.username} {item.display_name} · 剩余额度 {item.quota} · 已用 {item.used_quota} · 请求 {item.request_count} · 分组 {item.group}"
+                    f"#{item.id} {item.username} {item.display_name} · 剩余额度 {self.settings.currency.display(item.quota)} · 已用 {self.settings.currency.display(item.used_quota)} · 请求 {item.request_count} · 分组 {item.group}"
                     for item in users
                 )
                 or "没有匹配用户"

@@ -5,7 +5,7 @@ import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { Statistics } from "@/api/types";
-import { shortDate, timeCN, number } from "@/utils/format";
+import { shortDate, timeCN, number, quotaText } from "@/utils/format";
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const props = defineProps<{ data: Statistics }>();
 const root = ref<HTMLElement>();
@@ -30,7 +30,7 @@ function draw() {
       formatter: (params: unknown) => {
         const p = (params as { dataIndex: number }[])[0];
         const item = points[p.dataIndex];
-        return `${timeCN(item.label, props.data.timezone)}\n消耗 ${number(item.quota)} quota\n消费 ${number(item.success_records)} · 错误 ${number(item.error_records)}`;
+        return `${timeCN(item.label, props.data.timezone)}\n消耗 ${quotaText(item.quota, item.quota_display)}\n消费 ${number(item.success_records)} · 错误 ${props.data.unavailable_metrics?.includes("error_records") ? "未提供" : number(item.error_records)}`;
       }
     },
     xAxis: {
@@ -48,6 +48,7 @@ function draw() {
     },
     yAxis: {
       type: "value",
+      name: points.some(p => p.quota_cny != null) ? "¥" : "quota",
       axisLabel: {
         color: style.getPropertyValue("--muted"),
         fontFamily: "Consolas"
@@ -59,7 +60,9 @@ function draw() {
     series: [
       {
         type: "line",
-        data: points.map(p => p.quota),
+        data: points.map(p =>
+          p.quota_cny == null ? p.quota : Number(p.quota_cny)
+        ),
         symbolSize: 5,
         showSymbol: false,
         lineStyle: { color: accent, width: 2 },

@@ -1,18 +1,20 @@
 """Validated configuration; templates are substitution, never executable code."""
 
+import re
 from string import Formatter
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ERROR_TEMPLATE = """渠道异常告警
+错误日志时间：{log_time}
+日志 ID：{log_id}
+上游请求 ID：{upstream_request_id}
 渠道：{channel_name}（#{channel_id}）
 状态码：{status_code}
-错误码：{error_code}
 模型：{model}
 错误信息：{error_message}
-上轮冷却窗口内同类错误累计：{count} 次
-时间：{time}（北京时间）"""
+上轮冷却窗口内同类错误累计：{count} 次"""
 PLACEHOLDERS = {
     "channel_name",
     "channel_id",
@@ -20,6 +22,10 @@ PLACEHOLDERS = {
     "error_code",
     "model",
     "error_message",
+    "log_time",
+    "log_id",
+    "request_id",
+    "upstream_request_id",
     "count",
     "time",
 }
@@ -82,7 +88,17 @@ class ErrorRule(Policy):
         for _, name, spec, conversion in Formatter().parse(value):
             if name is not None and (name not in PLACEHOLDERS or spec or conversion):
                 raise ValueError("模板包含不支持的占位符/格式")
-        return value
+        lines = []
+        for line in value.splitlines():
+            names = {name for _, name, _, _ in Formatter().parse(line)}
+            if names & {"error_code", "time"} or re.match(
+                r"^\s*(?:[-*]\s*)?(?:错误码|告警时间|时间)\s*[:：]", line
+            ):
+                continue
+            if "log_time" in names:
+                line = line.replace("（北京时间）", "").replace("(北京时间)", "")
+            lines.append(line)
+        return "\n".join(lines).strip() or ERROR_TEMPLATE
 
 
 class BalanceRule(Policy):

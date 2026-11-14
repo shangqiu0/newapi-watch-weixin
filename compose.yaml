@@ -4,6 +4,15 @@ services:
     restart: unless-stopped
     init: true
     env_file: .env
+    environment:
+      # Unset uses the bundled Redis; an explicitly empty value keeps memory-only mode.
+      WATCH_QUERY_REDIS_URL: ${WATCH_QUERY_REDIS_URL-redis://redis:6379/0}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - cache
     ports:
       - "127.0.0.1:8088:8088"
     volumes:
@@ -16,5 +25,45 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
+
+  redis:
+    # Official Redis image, pinned to the tested content rather than a moving latest tag.
+    image: redis:8.10.2@sha256:97ec88159e6d7cfb5ddef9015386087d58a912de80112f06ebdfa78fa5989901
+    restart: unless-stopped
+    user: redis
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - cache
+    # Cache only: no host port and no persistent business-data volume.
+    read_only: true
+    tmpfs:
+      - /data:size=16m,mode=1777
+    mem_limit: 256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+
+networks:
+  default:
+  cache:
+    internal: true
+
 volumes:
   watch-data:

@@ -10,6 +10,8 @@ from .control_models import LLMConfig
 
 MESSAGES = {
     "authentication_failed": "模型服务鉴权失败（HTTP 401/403）。请在模型设置中更正该服务对应的模型调用Key；管理令牌不能代替。",
+    "wrong_endpoint": "模型地址返回网页而非 Chat Completions JSON；域名根地址使用 /v1，也可填写完整 /chat/completions 端点。",
+    "group_unavailable": "模型令牌所属分组已弃用或不可用；请在模型服务平台修改令牌分组，并确认该分组允许使用当前模型。",
     "model_unavailable": "指定模型或上游渠道不可用，请核对模型ID及服务端渠道配置。",
     "rate_or_quota": "模型服务限流或额度不足，请检查模型调用额度并稍后重试。",
     "unsupported_tools": "模型或接口未按要求返回工具调用，请选择支持function tools的模型。",
@@ -54,7 +56,7 @@ class Provider:
         parts = urlsplit(base)
         if base.endswith("/chat/completions"):
             return base
-        if parts.hostname == "api.openai.com" and not parts.path.strip("/"):
+        if not parts.path.strip("/") and parts.hostname != "api.deepseek.com":
             base += "/v1"
         return base + "/chat/completions"
 
@@ -76,6 +78,8 @@ class Provider:
         except httpx.HTTPError:
             raise ModelFailure("connection_failed") from None
         status = response.status_code
+        if status == 403 and self._unavailable_group(response):
+            raise ModelFailure("group_unavailable", status)
         if status in {401, 403}:
             raise ModelFailure("authentication_failed", status)
         if status in {402, 429}:
@@ -89,6 +93,10 @@ class Provider:
             ):
                 raise ModelFailure("unsupported_tools", status)
             raise ModelFailure("provider_error", status)
+        if "text/html" in response.headers.get(
+            "content-type", ""
+        ).lower() or response.text.lstrip().lower().startswith(("<!doctype html", "<html")):
+            raise ModelFailure("wrong_endpoint", status)
         try:
             data = response.json()
             message = data["choices"][0]["message"]
@@ -97,6 +105,22 @@ class Provider:
             return message
         except (ValueError, KeyError, IndexError, TypeError):
             raise ModelFailure("invalid_response", status) from None
+
+    @staticmethod
+    def _unavailable_group(response: httpx.Response) -> bool:
+        # Only classify a known upstream condition; never expose provider text,
+        # private group names, credentials or request bodies in diagnostics.
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return False
+        message = str(error.get("message", ""))[:2000].lower()
+        return (
+            "分组" in message and any(word in message for word in ("弃用", "不可用", "禁用"))
+        ) or ("group" in message and any(word in message for word in ("deprecated", "disabled")))
 
     async def probe(self) -> dict[str, Any]:
         try:

@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
 import type { Page, UserInfo } from "@/api/types";
-import { number } from "@/utils/format";
+import { number, quotaText } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import { useRouter } from "vue-router";
 const store = usePlatformStore(),
@@ -27,16 +27,16 @@ const columns = [
   { label: "用户", prop: "username", minWidth: 160 },
   { label: "显示名", prop: "display_name", minWidth: 140 },
   {
-    label: "余额 quota",
+    label: "可用余额（¥）",
     align: "right",
     minWidth: 150,
-    formatter: (r: UserInfo) => number(r.quota)
+    formatter: (r: UserInfo) => quotaText(r.quota, r.quota_display)
   },
   {
-    label: "已用 quota",
+    label: "已用金额（¥）",
     align: "right",
     minWidth: 150,
-    formatter: (r: UserInfo) => number(r.used_quota)
+    formatter: (r: UserInfo) => quotaText(r.used_quota, r.used_quota_display)
   },
   {
     label: "请求数",
@@ -56,7 +56,7 @@ function search() {
 <template>
   <ConsolePage
     title="用户额度"
-    description="使用当前平台管理令牌查询用户，余额以平台原始 quota 单位显示"
+    description="使用当前平台管理令牌查询用户，余额与已用金额按当前平台的人民币显示设置返回"
     @refresh="refresh"
     ><section class="surface">
       <div class="table-toolbar">

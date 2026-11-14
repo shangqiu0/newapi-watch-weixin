@@ -87,7 +87,7 @@ class StateChecks:
         active = user.quota < rule.threshold
         if state and state[0]["is_active"] and rule.recovery_threshold is not None:
             active = user.quota < rule.recovery_threshold
-        text = f"{'余额不足提醒' if active else '余额恢复通知'}\n用户 #{rule.user_id} · {rule.name or user.username}\n当前余额：{user.quota:,} quota\n监控阈值：{rule.threshold:,} quota\n时间：{timestamp(now)}"
+        text = f"{'余额不足提醒' if active else '余额恢复通知'}\n用户 #{rule.user_id} · {rule.name or user.username}\n当前余额：{self.runtime.settings.currency.display(user.quota)}\n监控阈值：{self.runtime.settings.currency.display(rule.threshold)}\n时间：{timestamp(now)}"
         await self.repo.condition(
             key,
             active,

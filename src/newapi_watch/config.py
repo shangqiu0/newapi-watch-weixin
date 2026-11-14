@@ -8,11 +8,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .money import CurrencyConfig
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WATCH_", env_file=".env", extra="ignore")
 
     demo: bool = False
+    currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
     database: Path = Path("data/watch.sqlite3")
     timezone: str = "Asia/Shanghai"
     api_key: SecretStr = SecretStr("")

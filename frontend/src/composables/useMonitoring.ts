@@ -14,11 +14,17 @@ export function useMonitoring() {
   watch(remote.data, data => {
     config.value = data ? JSON.parse(JSON.stringify(data.config)) : null;
   });
-  async function save(): Promise<boolean> {
+  async function save(
+    balanceAmounts?: Record<
+      string,
+      { threshold_cny: string; recovery_threshold_cny: string | null }
+    >
+  ): Promise<boolean> {
     if (!config.value || saving.value) return false;
     saving.value = true;
     const id = platform.currentId;
     const payload = JSON.parse(JSON.stringify(config.value));
+    if (balanceAmounts) payload.balance_amounts = balanceAmounts;
     try {
       await request(`/platforms/${id}/monitoring`, "PUT", payload);
       if (platform.currentId === id) await remote.refresh();
