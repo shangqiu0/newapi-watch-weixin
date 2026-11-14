@@ -39,6 +39,8 @@ class LogRecord(BaseModel):
     error_code: str = Field(default="", max_length=256)
     error_message: str = Field(default="", max_length=2000)
     channel_name: str = Field(default="", max_length=512)
+    request_id: str = Field(default="", max_length=128)
+    upstream_request_id: str = Field(default="", max_length=128)
 
 
 class LogPage(BaseModel):

@@ -267,6 +267,8 @@ class NewAPIClient:
 
     def safe_log(self, item: dict[str, Any]) -> LogRecord:
         value = dict(item)
+        for field in ("request_id", "upstream_request_id"):
+            value[field] = self._trace_id(item.get(field))
         if item.get("type") == 5:
             other = item.get("other", {})
             try:
@@ -274,6 +276,8 @@ class NewAPIClient:
             except (ValueError, TypeError):
                 other = {}
             other = other if isinstance(other, dict) else {}
+            for field in ("request_id", "upstream_request_id"):
+                value[field] = value[field] or self._trace_id(other.get(field))
             content = str(item.get("content", ""))[:8000]
             try:
                 parsed = json.loads(content)
@@ -301,3 +305,11 @@ class NewAPIClient:
                 error_message=redact_text(message, self.settings)[:2000],
             )
         return LogRecord.model_validate(value)
+
+    def _trace_id(self, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        value = value.strip()
+        if len(value) > 128 or any(not 33 <= ord(char) <= 126 for char in value):
+            return ""
+        return redact_text(value, self.settings)

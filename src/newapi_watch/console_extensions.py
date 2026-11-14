@@ -308,8 +308,13 @@ def console_extensions(
 
     @router.post("/{platform_id}/alert-previews")
     async def alert_preview(platform_id: str, payload: PreviewInput) -> dict[str, Any]:
-        await control.platform(platform_id)
-        return wrap({"text": preview(payload.rule, payload.sample), "sends_messages": False})
+        config = await control.platform_config(platform_id)
+        return wrap(
+            {
+                "text": preview(payload.rule, payload.sample, timezone=config.timezone),
+                "sends_messages": False,
+            }
+        )
 
     @router.delete("/{platform_id}/bindings/{binding_id}")
     async def delete_binding(platform_id: str, binding_id: str) -> dict[str, Any]:

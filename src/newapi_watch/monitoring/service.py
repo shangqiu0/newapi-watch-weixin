@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from datetime import datetime
+from string import Formatter
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -20,20 +21,55 @@ if TYPE_CHECKING:
     from ..runtime import Runtime
 
 
-def preview(rule: ErrorRule, sample: dict[str, Any]) -> str:
+def preview(rule: ErrorRule, sample: dict[str, Any], *, timezone: str = "Asia/Shanghai") -> str:
     defaults = dict(
         channel_name="from bailian_支持缓存写",
         channel_id=93,
         status_code=400,
-        error_code="invalid_parameter_error",
         model="kimi-k3.1-pro",
         error_message="status_code=400, developer is not supported",
+        log_time="未提供",
+        log_id="未提供",
+        request_id="未提供",
+        upstream_request_id="未提供",
         count=7,
-        time=datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y年%m月%d日 %H:%M:%S"),
     )
-    return rule.template.format_map(
-        {**defaults, **{k: v for k, v in sample.items() if k in defaults}}
-    )
+    values = {**defaults, **{k: v for k, v in sample.items() if k in defaults}}
+    if "log_created_at" in sample:
+        values["log_time"] = error_log_time(sample["log_created_at"], timezone)
+    for field in ("log_time", "log_id", "request_id", "upstream_request_id"):
+        values[field] = values[field] or "未提供"
+    text = rule.template.format_map(values)
+    fields = {name for _, name, _, _ in Formatter().parse(rule.template)}
+    metadata = []
+    for field, label in (
+        ("log_time", "错误日志时间"),
+        ("log_id", "日志 ID"),
+        ("upstream_request_id", "上游请求 ID"),
+    ):
+        if field not in fields:
+            metadata.append(f"{label}：{values[field]}")
+    if (
+        values["upstream_request_id"] == "未提供"
+        and values["request_id"] != "未提供"
+        and "request_id" not in fields
+    ):
+        metadata.append(f"平台请求 ID：{values['request_id']}")
+    if not metadata:
+        return text
+    # Keep trace details ahead of long error messages, including saved legacy templates.
+    title, separator, body = text.partition("\n")
+    return "\n".join([title, *metadata, body] if separator else [*metadata, text])
+
+
+def error_log_time(created_at: int, timezone: str) -> str:
+    if type(created_at) is not int or created_at <= 0:
+        return "未提供"
+    try:
+        stamp = datetime.fromtimestamp(created_at, ZoneInfo(timezone))
+        return f"{stamp.year}年{stamp.month}月{stamp.day}日 {stamp:%H:%M:%S}"
+    except (OverflowError, OSError, ValueError):
+        return "未提供"
 
 
 async def record_alert(
@@ -95,6 +131,10 @@ class MonitoringService:
                     error_code=log.error_code or "未提供",
                     model=log.model_name,
                     error_message=redact_text(log.error_message, self.runtime.settings),
+                    log_id=log.id,
+                    log_created_at=log.created_at,
+                    request_id=log.request_id,
+                    upstream_request_id=log.upstream_request_id,
                 )
                 sample = {
                     key: redact_text(value, self.runtime.settings)
@@ -115,10 +155,13 @@ class MonitoringService:
             for bucket in buckets:
                 sample = json.loads(bucket["sample"])
                 sample["count"] = bucket["pending_count"]
-                sample["time"] = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai")).strftime(
-                    "%Y年%m月%d日 %H:%M:%S"
+                if "log_created_at" not in sample:
+                    # Old samples contain a preformatted Beijing time, not the original timestamp.
+                    sample.pop("log_time", None)
+                text = redact_text(
+                    preview(rule, sample, timezone=self.runtime.settings.timezone),
+                    self.runtime.settings,
                 )
-                text = redact_text(preview(rule, sample), self.runtime.settings)
                 await record_alert(
                     db,
                     "request_error:" + bucket["id"],
