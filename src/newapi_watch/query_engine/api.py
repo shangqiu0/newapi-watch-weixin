@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, Query
 
 from ..control_store import ControlError
+from ..money import decorate_money
 
 if TYPE_CHECKING:
     from ..fleet import Fleet
@@ -20,33 +21,38 @@ def query_routes(fleet: "Fleet") -> APIRouter:
             raise ControlError(409, "平台已停用，请先启用后查询")
         return entry.runtime.query_engine.jobs
 
-    def wrap(data: Any) -> dict[str, Any]:
+    def wrap(data: Any, *, platform_id: str) -> dict[str, Any]:
+        data = decorate_money(data, fleet.entry(platform_id).runtime.settings.currency)
         return {"code": 0, "message": "success", "data": data}
 
     @router.get("/{platform_id}/query-tasks")
     async def listing(
         platform_id: str, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)
     ) -> dict[str, Any]:
-        return wrap(await jobs(platform_id).admin_page(page, page_size))
+        return wrap(await jobs(platform_id).admin_page(page, page_size), platform_id=platform_id)
 
     @router.post("/{platform_id}/query-tasks", status_code=202)
     async def create(platform_id: str, payload: JobInput) -> dict[str, Any]:
-        return wrap(await jobs(platform_id).create(payload, "console"))
+        return wrap(await jobs(platform_id).create(payload, "console"), platform_id=platform_id)
 
     @router.get("/{platform_id}/query-tasks/{identifier}")
     async def detail(platform_id: str, identifier: str) -> dict[str, Any]:
         try:
-            return wrap(await jobs(platform_id).admin_get(identifier))
+            return wrap(await jobs(platform_id).admin_get(identifier), platform_id=platform_id)
         except ValueError:
             raise ControlError(404, "查询任务不存在") from None
 
     @router.delete("/{platform_id}/query-tasks/{identifier}")
     async def cancel(platform_id: str, identifier: str) -> dict[str, Any]:
-        return wrap(await jobs(platform_id).admin_action(identifier, "cancel"))
+        return wrap(
+            await jobs(platform_id).admin_action(identifier, "cancel"), platform_id=platform_id
+        )
 
     @router.post("/{platform_id}/query-tasks/{identifier}/retries")
     async def retry(platform_id: str, identifier: str) -> dict[str, Any]:
-        return wrap(await jobs(platform_id).admin_action(identifier, "retry"))
+        return wrap(
+            await jobs(platform_id).admin_action(identifier, "retry"), platform_id=platform_id
+        )
 
     @router.get("/{platform_id}/query-status")
     async def status(platform_id: str) -> dict[str, Any]:
@@ -57,7 +63,8 @@ def query_routes(fleet: "Fleet") -> APIRouter:
                 "request_batch": engine.options.task_request_budget,
                 "batch_seconds": engine.options.task_seconds_budget,
                 "max_requests": engine.options.task_max_requests,
-            }
+            },
+            platform_id=platform_id,
         )
 
     return router

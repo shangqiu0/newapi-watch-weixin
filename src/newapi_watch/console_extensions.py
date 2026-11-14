@@ -15,12 +15,14 @@ from pydantic import BaseModel, Field
 from .control_models import PlatformPatch
 from .control_store import ControlError, ControlStore
 from .fleet import Fleet
+from .money import decorate_money, normalize_balance_amounts
 from .monitoring.models import ErrorRule, MonitoringConfig
 from .monitoring.service import preview
 from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .persistence import row, rows
 from .query_engine.api import query_routes
+from .upstream_api import upstream_routes
 
 
 class MonitorRunInput(BaseModel):
@@ -42,8 +44,10 @@ def console_extensions(
     router = APIRouter(prefix="/console/api/platforms", dependencies=[Depends(session)])
 
     router.include_router(query_routes(fleet))
+    router.include_router(upstream_routes(control, fleet))
 
-    def wrap(data: Any) -> dict[str, Any]:
+    def wrap(data: Any, *, platform_id: str) -> dict[str, Any]:
+        data = decorate_money(data, fleet.entry(platform_id).runtime.settings.currency)
         return {"code": 0, "message": "success", "data": data}
 
     def entry(platform_id: str) -> Any:
@@ -56,7 +60,7 @@ def console_extensions(
         result = await entry(platform_id).runtime.commands.operations.alerts(
             page=page, page_size=page_size
         )
-        return wrap(result)
+        return wrap(result, platform_id=platform_id)
 
     @router.get("/{platform_id}/notifications")
     async def notifications(
@@ -81,7 +85,8 @@ def console_extensions(
                 "total": count["total"] if count else 0,
                 "page": page,
                 "page_size": page_size,
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.post("/{platform_id}/notification-retries")
@@ -94,7 +99,7 @@ def console_extensions(
             )
         except OperationError as exc:
             raise ControlError(exc.status, str(exc)) from None
-        return wrap(result)
+        return wrap(result, platform_id=platform_id)
 
     @router.get("/{platform_id}/audits")
     async def audits(
@@ -103,7 +108,7 @@ def console_extensions(
         result = await entry(platform_id).runtime.commands.audits.list(
             page=page, page_size=page_size
         )
-        return wrap(result)
+        return wrap(result, platform_id=platform_id)
 
     @router.get("/{platform_id}/channels")
     async def channels(
@@ -129,7 +134,8 @@ def console_extensions(
                 "all_total": result["total"],
                 "page": page,
                 "page_size": page_size,
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.post("/{platform_id}/statistics-queries")
@@ -152,9 +158,12 @@ def console_extensions(
             return wrap(
                 await runtime.query_engine.statistics(
                     query, "console", exact=exact, allow_tasks=request.method == "POST"
-                )
+                ),
+                platform_id=platform_id,
             )
-        return wrap(await runtime.commands.data.statistics(query, live=False))
+        return wrap(
+            await runtime.commands.data.statistics(query, live=False), platform_id=platform_id
+        )
 
     @router.get("/{platform_id}/logs")
     async def logs(
@@ -182,7 +191,8 @@ def console_extensions(
                     status=http_status,
                     channel=channel_id,
                     cursor=cursor,
-                )
+                ),
+                platform_id=platform_id,
             )
         if live:
             return wrap(
@@ -194,7 +204,8 @@ def console_extensions(
                     log_type=log_type,
                     channel_id=channel_id,
                     http_status=http_status,
-                )
+                ),
+                platform_id=platform_id,
             )
         params = (start, end, log_type, log_type, channel_id, channel_id, http_status, http_status)
         where = "created_at>=? AND created_at<? AND (?=0 OR type=?) AND (?=0 OR channel_id=?) AND (?=0 OR http_status=?)"
@@ -216,7 +227,8 @@ def console_extensions(
                 "source": "newapi_admin_api" if live else "local_newapi_logs",
                 "complete": live,
                 "timezone": runtime.settings.timezone,
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.get("/{platform_id}/users")
@@ -234,7 +246,8 @@ def console_extensions(
                 "source": "newapi_admin_api",
                 "page": page,
                 "page_size": page_size,
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.get("/{platform_id}/monitoring")
@@ -256,16 +269,22 @@ def console_extensions(
                 "errors": errors,
                 "execution": await runtime.policies.snapshot() if runtime.policies else None,
                 "last_run": json.loads(await runtime.store.get_meta("policy:last_run") or "null"),
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.put("/{platform_id}/monitoring")
-    async def save_monitoring(platform_id: str, config: MonitoringConfig) -> dict[str, Any]:
+    async def save_monitoring(platform_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        currency = (await control.platform_config(platform_id)).currency
+        try:
+            config = MonitoringConfig.model_validate(normalize_balance_amounts(payload, currency))
+        except ValueError:
+            raise ControlError(400, "余额阈值或策略无效，请确认人民币换算和输入范围") from None
         await control.patch_platform(platform_id, PlatformPatch(monitoring=config))
         runtime = entry(platform_id).runtime
         if runtime.policies:
             await runtime.policies.configure(config)
-        return wrap(config.model_dump())
+        return wrap(config.model_dump(), platform_id=platform_id)
 
     @router.post("/{platform_id}/monitor-runs", status_code=202)
     async def monitor_run(platform_id: str, payload: MonitorRunInput) -> dict[str, Any]:
@@ -278,7 +297,7 @@ def console_extensions(
             key = "policy:run:" + identifier
             previous = await runtime.store.get_meta(key)
             if previous:
-                return wrap(json.loads(previous))
+                return wrap(json.loads(previous), platform_id=platform_id)
             if any(
                 t.get_name().startswith("manual-check-") and not t.done() for t in runtime.tasks
             ):
@@ -304,7 +323,7 @@ def console_extensions(
 
             runtime.tasks = [t for t in runtime.tasks if not t.done()]
             runtime.tasks.append(asyncio.create_task(run(), name="manual-check-" + identifier))
-            return wrap(result)
+            return wrap(result, platform_id=platform_id)
 
     @router.post("/{platform_id}/alert-previews")
     async def alert_preview(platform_id: str, payload: PreviewInput) -> dict[str, Any]:
@@ -313,13 +332,20 @@ def console_extensions(
             {
                 "text": preview(payload.rule, payload.sample, timezone=config.timezone),
                 "sends_messages": False,
-            }
+            },
+            platform_id=platform_id,
         )
 
     @router.delete("/{platform_id}/bindings/{binding_id}")
     async def delete_binding(platform_id: str, binding_id: str) -> dict[str, Any]:
         await control.binding(platform_id, binding_id)
-        monitoring = (await control.platform_config(platform_id)).monitoring
+        saved = await control.platform_config(platform_id)
+        if any(
+            binding_id in a.query_binding_ids or binding_id in a.notify_binding_ids
+            for a in saved.upstream_accounts
+        ):
+            raise ControlError(409, "此绑定仍被上游账户引用，请先调整查询或通知目标")
+        monitoring = saved.monitoring
         if any(binding_id in rule.binding_ids for _, rule in monitoring.routes()):
             raise ControlError(
                 409, "此Webhook仍被监控策略引用，请先修改策略中的通知目标；也可暂时停用绑定"
@@ -333,6 +359,6 @@ def console_extensions(
                 "DELETE FROM bindings WHERE platform_id=? AND id=?", (platform_id, binding_id)
             )
         await fleet.reload(platform_id)
-        return wrap({"deleted": True})
+        return wrap({"deleted": True}, platform_id=platform_id)
 
     return router

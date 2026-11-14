@@ -3,7 +3,7 @@ import { ref, reactive, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useMonitoring } from "@/composables/useMonitoring";
-import { number, timeCN } from "@/utils/format";
+import { quotaText, timeCN } from "@/utils/format";
 import type { BalanceRule } from "@/api/types";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import PolicyTargets from "@/components/Console/PolicyTargets.vue";
@@ -26,7 +26,22 @@ const form = reactive<BalanceRule>({
   notify_recovery: true,
   mention_all: false
 });
+watch(
+  () => state.platform.currentId,
+  () => {
+    dialog.value = false;
+    editing.value = null;
+  }
+);
+const amountThreshold = ref("0"),
+  amountRecovery = ref("");
+let initialThreshold = "",
+  initialRecovery = "";
 function edit(rule?: BalanceRule) {
+  amountThreshold.value = rule?.threshold_cny ?? "0";
+  amountRecovery.value = rule?.recovery_threshold_cny ?? "";
+  initialThreshold = amountThreshold.value;
+  initialRecovery = amountRecovery.value;
   editing.value = rule?.user_id ?? null;
   Object.assign(
     form,
@@ -53,18 +68,34 @@ async function save() {
     ElMessage.error("该用户已有余额监控，请使用编辑操作");
     return;
   }
+  const changed =
+    editing.value === null ||
+    amountThreshold.value !== initialThreshold ||
+    amountRecovery.value !== initialRecovery;
+  if (changed && !state.platform.current?.currency?.confirmed) {
+    ElMessage.error("请先到金额显示页面确认当前平台人民币换算");
+    return;
+  }
   if (i >= 0) config.value.balances[i] = { ...form };
   else config.value.balances.push({ ...form });
-  if (await state.save()) dialog.value = false;
+  const edits = changed
+    ? {
+        [String(form.user_id)]: {
+          threshold_cny: amountThreshold.value,
+          recovery_threshold_cny: amountRecovery.value || null
+        }
+      }
+    : undefined;
+  if (await state.save(edits)) dialog.value = false;
 }
 const sample = (id: number) => state.data.value?.samples.find(s => s.id === id);
 const columns = [
   { label: "用户", slot: "user", minWidth: 180 },
   {
-    label: "阈值 quota",
+    label: "提醒阈值（¥）",
     align: "right",
     minWidth: 160,
-    formatter: (r: BalanceRule) => number(r.threshold)
+    formatter: (r: BalanceRule) => quotaText(r.threshold, r.threshold_display)
   },
   { label: "当前余额", slot: "balance", align: "right", minWidth: 160 },
   { label: "监控状态", slot: "status", minWidth: 130 },
@@ -111,7 +142,7 @@ watch(
           v-model="config.balance_poll_seconds"
           :min="30"
           :max="86400"
-        /><el-button :loading="state.saving.value" @click="state.save"
+        /><el-button :loading="state.saving.value" @click="state.save()"
           >保存间隔</el-button
         ><span class="toolbar-meta"
           >{{ config.balances.length }} 个监控账户</span
@@ -123,7 +154,12 @@ watch(
           }}<span class="cell-id">#{{ row.user_id }}</span></template
         ><template #balance="{ row }"
           ><span class="mono">{{
-            sample(row.user_id) ? number(sample(row.user_id).quota) : "尚未检查"
+            sample(row.user_id)
+              ? quotaText(
+                  sample(row.user_id).quota,
+                  sample(row.user_id).quota_display
+                )
+              : "尚未检查"
           }}</span
           ><el-tooltip
             v-if="state.data.value?.errors[String(row.user_id)]"
@@ -177,8 +213,8 @@ watch(
         ></pure-table
       >
       <p class="section-footnote">
-        quota 为平台原始额度单位，不直接等于人民币。API
-        查询失败不会被当成余额为零
+        阈值以人民币输入，后端按当前平台参数换算并继续保存整数
+        quota。未确认金额参数时请先设置；查询失败不会被当成余额为零
       </p>
     </section>
     <el-dialog
@@ -194,12 +230,13 @@ watch(
             :disabled="!!editing" /></el-form-item
         ><el-form-item label="监控名称"
           ><el-input v-model="form.name" maxlength="80" /></el-form-item
-        ><el-form-item label="余额低于此阈值时提醒（quota）"
-          ><el-input-number
-            v-model="form.threshold"
-            :min="0"
-            :max="Number.MAX_SAFE_INTEGER"
-            style="width: 100%"
+        ><el-form-item label="余额低于此阈值时提醒（¥）"
+          ><el-input
+            v-model="amountThreshold"
+            aria-label="余额阈值人民币"
+            inputmode="decimal"
+            :disabled="!state.platform.current?.currency?.confirmed"
+            placeholder="人民币金额，后端精确换算"
         /></el-form-item>
         <div class="form-grid">
           <el-form-item label="此用户检查间隔（秒，留空用平台默认）"
@@ -212,11 +249,14 @@ watch(
               v-model="form.confirmations"
               :min="1"
               :max="20" /></el-form-item
-          ><el-form-item label="恢复阈值（quota，可选）"
-            ><el-input-number
-              v-model="form.recovery_threshold"
-              :min="form.threshold"
-              :max="Number.MAX_SAFE_INTEGER" /></el-form-item
+          ><el-form-item label="恢复阈值（¥，可选）"
+            ><el-input
+              v-model="amountRecovery"
+              aria-label="恢复阈值人民币"
+              inputmode="decimal"
+              :disabled="
+                !state.platform.current?.currency?.confirmed
+              " /></el-form-item
           ><el-form-item label="重复提醒冷却（秒）"
             ><el-input-number
               v-model="form.cooldown_seconds"

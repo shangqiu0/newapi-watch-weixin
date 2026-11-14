@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { usePlatformStore } from "@/store/modules/platform";
 import { useRemote } from "@/composables/useRemote";
 import type { Statistics, PendingStatistics, Rank } from "@/api/types";
-import { number } from "@/utils/format";
+import { number, quotaText } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import TrendChart from "@/components/Console/TrendChart.vue";
 const platform = usePlatformStore(),
@@ -39,9 +39,9 @@ const columns = [
         : number(r.error_records)
   },
   {
-    label: "消耗 quota",
+    label: "消耗金额（¥）",
     minWidth: 160,
-    formatter: (r: Rank) => number(r.quota)
+    formatter: (r: Rank) => quotaText(r.quota, r.quota_display)
   }
 ];
 </script>
@@ -91,7 +91,7 @@ const columns = [
             {{
               snapshot?.source === "newapi_hourly_aggregate"
                 ? "上游已落盘汇总，非实时完整日志"
-                : "quota 为原始额度单位"
+                : "金额按当前平台的人民币显示设置；未确认换算时保留原始 quota"
             }}
           </p>
         </div>

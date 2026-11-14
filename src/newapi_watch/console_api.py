@@ -24,6 +24,7 @@ from .control_models import BindingInput, BindingPatch, PlatformInput, PlatformP
 from .control_store import ControlError, ControlStore
 from .fleet import Fleet
 from .model_provider import Provider
+from .money import decorate_money
 from .operations import OperationError
 from .periods import StatisticsQuery
 from .transport import RequestLimits
@@ -217,7 +218,9 @@ def create_console(
                 "monitoring": await runtime.policies.snapshot() if runtime.policies else None,
                 "health": health,
                 "channels": await runtime.store.channels(),
-                "statistics": stats.model_dump(mode="json"),
+                "statistics": decorate_money(
+                    stats.model_dump(mode="json"), runtime.settings.currency
+                ),
                 "alerts": await runtime.commands.operations.alerts(),
                 "audits": await runtime.commands.audits.list(),
                 "bindings": await control.bindings(platform_id),

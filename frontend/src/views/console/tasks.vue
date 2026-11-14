@@ -5,7 +5,7 @@ import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
 import { request, perform } from "@/api/console";
 import type { QueryTask, Page } from "@/api/types";
-import { number, timeCN } from "@/utils/format";
+import { number, quotaText, timeCN } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import TrendChart from "@/components/Console/TrendChart.vue";
 const store = usePlatformStore(),
@@ -177,13 +177,18 @@ const columns = [
       <p>
         消费记录 {{ number(selected.result.summary.success_records) }} ·
         错误记录 {{ number(selected.result.summary.error_records) }} · 消耗
-        {{ number(selected.result.summary.quota) }} quota
+        {{
+          quotaText(
+            selected.result.summary.quota,
+            selected.result.summary.quota_display
+          )
+        }}
       </p>
       <TrendChart :data="selected.result" /><pure-table
         :data="selected.result.ranking"
         :columns="[
           { label: '对象', prop: 'label' },
-          { label: '消耗 quota', prop: 'quota' },
+          { label: '消耗金额', prop: 'quota_display' },
           { label: '消费记录', prop: 'success_records' },
           { label: '错误记录', prop: 'error_records' }
         ]"

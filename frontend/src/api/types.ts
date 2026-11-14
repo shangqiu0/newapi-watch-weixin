@@ -6,6 +6,7 @@ export interface LLM {
   has_api_key: boolean;
 }
 export interface Platform {
+  currency?: Currency;
   revision?: number;
   updated_at?: number;
   runtime_status?: "running" | "disabled" | "error";
@@ -20,7 +21,7 @@ export interface Platform {
   llm: LLM;
   has_newapi_token: boolean;
 }
-export interface Channel {
+export interface Channel extends MoneyFields {
   id: number;
   name: string;
   status: number;
@@ -36,7 +37,7 @@ export interface Channel {
   type?: number;
   updated_at?: number;
 }
-export interface Metrics {
+export interface Metrics extends MoneyFields {
   success_records: number;
   error_records: number;
   quota: number;
@@ -82,6 +83,7 @@ export interface AuditRecord {
   duration_ms: number;
 }
 export interface Binding {
+  notification_chat_id?: string;
   id: string;
   name: string;
   kind: "bot" | "webhook";
@@ -161,7 +163,7 @@ export interface ErrorRule extends PolicySettings {
   mention_all: boolean;
   template: string;
 }
-export interface BalanceRule extends PolicySettings {
+export interface BalanceRule extends PolicySettings, MoneyFields {
   poll_seconds: number | null;
   recovery_threshold: number | null;
   user_id: number;
@@ -199,16 +201,16 @@ export interface MonitoringData {
   execution: MonitorExecution;
   last_run: MonitorRun | null;
   config: MonitoringConfig;
-  samples: {
+  samples: (MoneyFields & {
     id: number;
     quota: number;
     threshold: number;
     is_low: boolean;
     updated_at: number;
-  }[];
+  })[];
   errors: Record<string, string>;
 }
-export interface UserInfo {
+export interface UserInfo extends MoneyFields {
   id: number;
   username: string;
   display_name: string;
@@ -218,7 +220,7 @@ export interface UserInfo {
   status: number;
   group: string;
 }
-export interface LogRecord {
+export interface LogRecord extends MoneyFields {
   id: number;
   type: number;
   channel_id: number;
@@ -316,4 +318,38 @@ export interface PendingStatistics {
   pending: true;
   task: QueryTask;
   limitation: string;
+}
+export interface Currency {
+  confirmed: boolean;
+  quota_per_unit: string;
+  usd_exchange_rate: string;
+  source: "manual" | "status";
+}
+export interface MoneyFields {
+  quota_display?: string;
+  quota_cny?: string | null;
+  used_quota_display?: string;
+  used_quota_cny?: string | null;
+  threshold_display?: string;
+  threshold_cny?: string | null;
+  recovery_threshold_cny?: string | null;
+}
+export interface UpstreamAccount {
+  id: string;
+  name: string;
+  base_url: string;
+  user_id: number;
+  enabled: boolean;
+  monitor_enabled: boolean;
+  has_access_token: boolean;
+  poll_seconds: number;
+  currency: Currency;
+  threshold_cny: string;
+  recovery_threshold_cny: string | null;
+  cooldown_seconds: number;
+  notify_recovery: boolean;
+  query_binding_ids: string[];
+  notify_binding_ids: string[];
+  sample?: (MoneyFields & { quota: number; queried_at: number }) | null;
+  error?: string;
 }

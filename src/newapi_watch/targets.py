@@ -2,6 +2,7 @@
 
 import hashlib
 import time
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -22,10 +23,12 @@ class Targets:
     ) -> None:
         self.control, self.platform_id, self.name, self.http = control, platform_id, name, http
         self.dry_run = dry_run
+        self.bot_sender: Callable[[str, str, str], Awaitable[None]] | None = None
 
     async def ready(self) -> bool:
         return any(
-            item["kind"] == "webhook" and item["enabled"]
+            item["enabled"]
+            and (item["kind"] == "webhook" or bool(item.get("notification_chat_id")))
             for item in await self.control.bindings(self.platform_id)
         )
 
@@ -42,7 +45,11 @@ class Targets:
         targets = [
             item
             for item in await self.control.bindings(self.platform_id)
-            if item["kind"] == "webhook" and item["enabled"]
+            if item["enabled"]
+            and (
+                item["kind"] == "webhook"
+                or (kind == "balance" and binding_ids and item.get("notification_chat_id"))
+            )
         ]
         if not targets:
             raise RuntimeError("该平台尚未绑定启用的群Webhook")
@@ -67,7 +74,15 @@ class Targets:
                 continue
             binding = await self.control.binding(self.platform_id, target["id"], private=True)
             try:
-                if not self.dry_run:
+                if not self.dry_run and binding["kind"] == "bot":
+                    if self.bot_sender is None:
+                        raise RuntimeError("机器人余额提醒通道未连接")
+                    await self.bot_sender(
+                        binding["id"],
+                        binding["notification_chat_id"],
+                        f"平台：{self.name}\n{content}",
+                    )
+                elif not self.dry_run:
                     notifier = GroupWebhookNotifier(
                         binding["private"]["webhook_url"],
                         self.http,

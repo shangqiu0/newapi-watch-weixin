@@ -95,6 +95,8 @@ class Runtime:
         self.tasks: list[asyncio.Task[Any]] = []
         self.stop = asyncio.Event()
         self.policies: MonitoringService | None = None
+        self.upstream: Any = None
+        self.commands.upstream = None
 
     async def open(
         self, *, start_tasks: bool = True, monitoring: MonitoringConfig | None = None
@@ -122,6 +124,8 @@ class Runtime:
                 return Snapshot.model_validate(await self.commands.data.statistics(query))
 
             self.reports.live_snapshot = live_snapshot
+        if self.upstream is not None:
+            await self.upstream.initialize()
         if not start_tasks:
             return
         # Initial tasks execute independently: one slow endpoint does not prevent others starting.
@@ -207,11 +211,15 @@ class Runtime:
 
     async def close(self) -> None:
         self.stop.set()
+        if self.upstream is not None:
+            self.upstream.closed = True
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.policies:
             await self.policies.close()
+        if self.upstream is not None:
+            await self.upstream.close()
         await self.query_engine.close()
         await self.error_search.cache.close()
         if self.owns_http:

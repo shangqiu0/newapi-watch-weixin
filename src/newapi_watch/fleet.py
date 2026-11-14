@@ -19,6 +19,7 @@ from .health import Health
 from .persistence import rows
 from .runtime import Runtime
 from .targets import Targets
+from .upstream_accounts import UpstreamAccounts
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class Fleet:
                     "newapi_token": config.newapi_token,
                     "newapi_user_id": config.newapi_user_id,
                     "timezone": config.timezone,
+                    "currency": config.currency,
                     "poll_seconds": config.poll_seconds,
                     "log_seconds": config.log_seconds,
                     "probe_enabled": False,
@@ -78,6 +80,8 @@ class Fleet:
                 }
             )
             runtime = Runtime(settings)
+            runtime.upstream = UpstreamAccounts(runtime, config.upstream_accounts)
+            runtime.commands.upstream = runtime.upstream
             try:
                 runtime.notifications.webhook = Targets(
                     self.control, platform_id, config.name, self.notify_http, dry_run=self.demo
@@ -169,6 +173,23 @@ class Fleet:
                             )
                         )
                     )
+
+                async def send_balance(binding_id: str, chat_id: str, text: str) -> None:
+                    bot = next(
+                        (b for b in entry.bots if b.namespace == "binding:" + binding_id + ":"),
+                        None,
+                    )
+                    if bot is None:
+                        raise RuntimeError("余额提醒机器人未连接")
+                    await bot.send_task_result(chat_id, text)
+
+                runtime.notifications.webhook.bot_sender = send_balance
+                if config.enabled and self.start_tasks:
+                    runtime.tasks.append(
+                        asyncio.create_task(
+                            runtime.periodic("upstream-balances", 1, runtime.upstream.tick)
+                        )
+                    )
                 self.failures.pop(platform_id, None)
             except BaseException:
                 await runtime.close()
@@ -229,7 +250,7 @@ class Fleet:
             summary = result["summary"]
             text = (
                 f"查询任务已完成 · {item['id']}\n消费记录：{summary['success_records']:,}\n"
-                f"错误记录：{summary['error_records']:,}\n消耗：{summary['quota']:,} quota\n"
+                f"错误记录：{summary['error_records']:,}\n消耗：{entry.runtime.settings.currency.display(summary['quota'])}\n"
                 f"已读取：{result['records_read']:,} 条\n可回复“任务 {item['id']}”查看结果。"
             )
             if result.get("unknown_status_records"):

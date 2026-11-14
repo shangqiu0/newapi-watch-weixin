@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .analytics import Snapshot
 from .client import UpstreamError
 from .commands import Commands
+from .money import decorate_money
 from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .redaction import redact_data
@@ -22,6 +23,10 @@ class NoArgs(BaseModel):
 class ChannelListArgs(NoArgs):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=100, ge=1, le=100)
+
+
+class UpstreamArgs(NoArgs):
+    account_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 class ChannelArgs(NoArgs):
@@ -73,6 +78,14 @@ SCHEMAS: dict[str, tuple[type[BaseModel], str]] = {
     "get_errors": (ErrorArgs, "当前平台指定日期范围的错误日志摘要，不返回原始敏感正文"),
     "get_alerts": (ChannelListArgs, "当前平台最近告警和确认状态"),
     "get_capabilities": (NoArgs, "说明本机器人可查询和统计的能力"),
+    "get_upstream_accounts": (
+        NoArgs,
+        "列出当前机器人被授权的上游普通用户账户，仅含元信息，不查询其他平台",
+    ),
+    "get_upstream_balance": (
+        UpstreamArgs,
+        "通过上游自身账户接口实时查询已绑定账户的余额和已用金额，不能查询其他用户",
+    ),
 }
 
 
@@ -110,6 +123,8 @@ class Tools:
             result = await self._dispatch(name, parsed.model_dump())
             if result.get("ok") is True:
                 self.successful.append(name)
+            if not name.startswith("get_upstream_"):
+                result = decorate_money(result, self.commands.settings.currency)
             safe: dict[str, Any] = redact_data(result, self.commands.settings)
             return safe
         except UpstreamError as error:
@@ -126,6 +141,18 @@ class Tools:
             return {"ok": False, "error": "参数无效；只允许当前绑定平台，不接受平台ID"}
 
     async def _dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name.startswith("get_upstream_"):
+            service = self.commands.upstream
+            if service is None:
+                return {"ok": False, "error": "当前未配置上游账户"}
+            binding = self.context.get("binding_id", "web")
+            if name == "get_upstream_accounts":
+                return {
+                    "ok": True,
+                    "items": [a.public() for a in service.visible(binding)],
+                    "source": "configured_upstream_accounts",
+                }
+            return {"ok": True, **await service.query(args["account_id"], binding_id=binding)}
         if name == "get_channel":
             return {"ok": True, **await self.commands.data.channel(args["channel_id"])}
         if name == "get_channels":

@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
 import type { LogRecord, Page } from "@/api/types";
-import { number, timeCN } from "@/utils/format";
+import { number, quotaText, timeCN } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 const store = usePlatformStore(),
   page = ref(1),
@@ -47,10 +47,10 @@ const columns = [
   },
   { label: "HTTP", width: 80, prop: "http_status", slot: "http" },
   {
-    label: "消耗 quota",
+    label: "消耗金额（¥）",
     align: "right",
     minWidth: 130,
-    formatter: (r: LogRecord) => number(r.quota)
+    formatter: (r: LogRecord) => quotaText(r.quota, r.quota_display)
   },
   { label: "错误码", prop: "error_code", minWidth: 180 },
   { label: "详情", fixed: "right", width: 80, slot: "action" }

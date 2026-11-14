@@ -35,7 +35,7 @@ async function showPreview(): Promise<void> {
         type="primary"
         :loading="state.saving.value"
         :disabled="!config"
-        @click="state.save"
+        @click="state.save()"
         >保存策略</el-button
       ></template
     >

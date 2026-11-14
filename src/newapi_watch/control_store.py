@@ -102,6 +102,9 @@ class ControlStore:
             },
         )
         result["monitoring"] = config.get("monitoring", {})
+        parsed = PlatformInput.model_validate(config)
+        result["currency"] = parsed.currency.model_dump(mode="json")
+        result["upstream_accounts"] = [a.public() for a in parsed.upstream_accounts]
         return result
 
     async def platforms(self) -> list[dict[str, Any]]:
@@ -122,6 +125,11 @@ class ControlStore:
 
     async def create_platform(self, config: PlatformInput) -> dict[str, Any]:
         identifier, now = uuid4().hex, time.time()
+        if any(
+            a.query_binding_ids or a.notify_binding_ids or not a.access_token.get_secret_value()
+            for a in config.upstream_accounts
+        ):
+            raise ControlError(400, "新平台请先保存后添加上游账户与通知绑定")
         if any(rule.binding_ids for _, rule in config.monitoring.routes()):
             raise ControlError(400, "新平台请先创建Webhook绑定，再选择策略通知目标")
         async with self.transaction() as db:
@@ -151,6 +159,7 @@ class ControlStore:
             raise ControlError(409, "更换NewAPI地址需新建平台，避免历史数据混合")
         config = PlatformInput.model_validate(values)
         await self.validate_monitoring(identifier, config.monitoring)
+        await self.validate_upstream_accounts(identifier, config)
         async with self.transaction() as db:
             changed = await db.execute(
                 "UPDATE platforms SET name=?,enabled=?,config=?,revision=revision+1,updated_at=? WHERE id=? AND deleted_at IS NULL",
@@ -198,6 +207,28 @@ class ControlStore:
                 if not binding or binding["kind"] != "webhook" or kind not in binding["events"]:
                     raise ControlError(400, "策略通知目标必须是本平台且订阅对应事件的群Webhook")
 
+    async def validate_upstream_accounts(self, platform_id: str, config: PlatformInput) -> None:
+        bindings = {b["id"]: b for b in await self.bindings(platform_id)}
+        ids = [a.id for a in config.upstream_accounts]
+        if len(ids) != len(set(ids)):
+            raise ControlError(400, "上游账户ID不能重复")
+        for account in config.upstream_accounts:
+            if not account.access_token.get_secret_value().strip():
+                raise ControlError(400, "上游账户缺少用户访问令牌")
+            for identifier in account.query_binding_ids:
+                if identifier not in bindings or bindings[identifier]["kind"] != "bot":
+                    raise ControlError(400, "查询机器人必须属于当前平台")
+            for identifier in account.notify_binding_ids:
+                target = bindings.get(identifier)
+                if (
+                    not target
+                    or "balance" not in target["events"]
+                    or (target["kind"] == "bot" and not target.get("notification_chat_id"))
+                ):
+                    raise ControlError(
+                        400, "余额通知目标必须属于当前平台、订阅余额事件；机器人还需设置接收会话ID"
+                    )
+
     def public_binding(self, item: dict[str, Any]) -> dict[str, Any]:
         config = self.vault.open(item["config"])
         result = {
@@ -212,6 +243,7 @@ class ControlStore:
             ),
             message_format=config.get("message_format", "markdown"),
             mention_all=config.get("mention_all", False),
+            notification_chat_id=config.get("notification_chat_id", ""),
         )
         return result
 
@@ -290,7 +322,13 @@ class ControlStore:
             ):
                 values[key] = value
         config = BindingInput.model_validate(values)
-        monitoring = (await self.platform_config(platform_id)).monitoring
+        platform_config = await self.platform_config(platform_id)
+        if any(binding_id in a.notify_binding_ids for a in platform_config.upstream_accounts):
+            if "balance" not in config.events or (
+                config.kind == "bot" and not config.notification_chat_id
+            ):
+                raise ControlError(409, "此目标仍被上游余额监控引用，不能移除余额订阅或接收会话")
+        monitoring = platform_config.monitoring
         if any(
             binding_id in rule.binding_ids and kind not in config.events
             for kind, rule in monitoring.routes()

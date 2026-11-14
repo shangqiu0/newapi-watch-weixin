@@ -82,15 +82,52 @@ class Assistant:
                 text = f"查询任务 {task['id']}：{labels.get(task['status'], task['status'])}，已读取 {task['progress'].get('records_read', 0):,} 条。"
                 if task["status"] == "complete" and task.get("result"):
                     summary = task["result"]["summary"]
-                    text += f"\n消费记录：{summary['success_records']:,} · 错误记录：{summary['error_records']:,}\n消耗：{summary['quota']:,} quota · Token：{summary['tokens']:,}"
+                    text += f"\n消费记录：{summary['success_records']:,} · 错误记录：{summary['error_records']:,}\n消耗：{self.commands.settings.currency.display(summary['quota'])} · Token：{summary['tokens']:,}"
                     text += "\n排行：" + "；".join(
-                        f"{i['label']} {i['quota']:,} quota" for i in task["result"]["ranking"][:5]
+                        f"{i['label']} {self.commands.settings.currency.display(i['quota'])}"
+                        for i in task["result"]["ranking"][:5]
                     )
                 else:
                     text += "\n" + task["error"]
                 return self._redact_result(CommandResult(text=text))
             except ValueError:
                 return CommandResult(text="任务不存在或不属于当前机器人会话", ok=False)
+        if text in {"会话ID", "会话 ID", "当前会话ID"}:
+            return CommandResult(
+                text="当前会话 ID：" + conversation_id.split(":", 1)[-1]
+                if source == "wecom" and conversation_id
+                else "请在需要接收告警的企业微信会话中发送“会话ID”。"
+            )
+        if self.commands.upstream is not None and (
+            match := re.fullmatch(r"(?:查询|查看)?上游(?:账户)?余额(?:\s+(.*))?", text)
+        ):
+            service = self.commands.upstream
+            keyword = (match[1] or "").strip()
+            accounts = [
+                a
+                for a in service.visible(self.binding_id)
+                if not keyword or keyword in {a.id, a.name}
+            ]
+            if not accounts:
+                return CommandResult(
+                    text="当前机器人没有匹配的已启用上游账户，请检查该平台的查询机器人绑定。",
+                    ok=False,
+                )
+            if len(accounts) > 5:
+                return CommandResult(
+                    text="请指定账户名称或ID：\n"
+                    + "\n".join(f"{a.name} · {a.id}" for a in accounts)
+                )
+            answers = []
+            for account in accounts:
+                try:
+                    result = await service.query(account.id, binding_id=self.binding_id)
+                    answers.append(
+                        f"{account.name}：可用余额 {result['quota_display']}，已用 {result.get('used_quota_display', '未提供')}（来源：上游自身账户接口）"
+                    )
+                except ValueError as error:
+                    answers.append(f"{account.name}：查询未完成，{error}；未将未知余额当作零。")
+            return self._redact_result(CommandResult(text="\n".join(answers)))
         if text in {"帮助", "help"}:
             return CommandResult(text=HELP)
         # Only explicit local management actions bypass the model. No read query
@@ -204,7 +241,11 @@ class Assistant:
             )
             calls = message.get("tool_calls") or []
             if not calls:
-                evidence = [name for name in tools.successful if name != "get_capabilities"]
+                evidence = [
+                    name
+                    for name in tools.successful
+                    if name not in {"get_capabilities", "get_upstream_accounts"}
+                ]
                 capability_question = bool(CAPABILITIES.search(text)) or text in {
                     "你好",
                     "谢谢",

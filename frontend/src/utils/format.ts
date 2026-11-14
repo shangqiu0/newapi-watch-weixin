@@ -57,3 +57,10 @@ export function alertState(record: { state: string; key?: string }): {
     ? { text: "已恢复", tone: "ok" }
     : { text: "未恢复", tone: "warn" };
 }
+
+export function quotaText(
+  raw: number | undefined | null,
+  display?: string
+): string {
+  return display ?? `${number(raw)} quota（人民币未配置）`;
+}

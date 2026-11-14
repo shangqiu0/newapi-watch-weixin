@@ -33,6 +33,8 @@ export default {
     page("alerts", "Alerts", "告警记录", Bell),
     page("notifications", "Notifications", "通知投递", Bell),
     page("balances", "Balances", "余额监控", Wallet),
+    page("upstreams", "Upstreams", "上游账户", Wallet),
+    page("currency", "Currency", "金额显示", Wallet),
     page("reports", "Reports", "报告调度", Reports),
     page("bindings", "Bindings", "机器人与通知", Bot),
     page("model", "Model", "模型服务", Model),
