@@ -474,9 +474,7 @@ async def test_error_burst_pages_pause_and_resume_without_stuck_cursor(tmp_path)
             }
             for i in range(3)
         ]
-        return httpx.Response(
-            200, json={"success": True, "data": {"items": items, "total": 9}}
-        )
+        return httpx.Response(200, json={"success": True, "data": {"items": items, "total": 9}})
 
     config = {
         "channels": {"enabled": False},

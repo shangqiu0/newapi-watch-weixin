@@ -245,7 +245,8 @@ class PolicyEngine:
             if total is not None and len(records) >= total:
                 break
             if page_result.total is None and (
-                not page_result.items or len(page_result.items) < self.runtime.client.settings.page_size
+                not page_result.items
+                or len(page_result.items) < self.runtime.client.settings.page_size
             ):
                 break
             page += 1
