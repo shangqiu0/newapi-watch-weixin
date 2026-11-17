@@ -16,7 +16,7 @@ import Notifications from "../src/views/console/notifications.vue";
 import Channels from "../src/views/console/channels.vue";
 import Logs from "../src/views/console/logs.vue";
 import Users from "../src/views/console/users.vue";
-import Audits from "../src/views/console/audit.vue";
+import Audits from "../src/components/Console/Settings/CommandRecords.vue";
 
 beforeEach(() => {
   localStorage.clear();

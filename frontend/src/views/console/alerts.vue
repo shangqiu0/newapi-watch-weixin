@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import HistoryActions from "@/components/Console/HistoryActions.vue";
+import { usePageBounds } from "@/composables/usePageBounds";
 import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
@@ -23,14 +25,25 @@ const { data, loading, error, refresh, total } = usePagedRemote<
 );
 const selected = ref<AlertRecord | null>(null),
   drawer = ref(false);
+const selectedRows = ref<AlertRecord[]>([]);
+watch([() => store.currentId, page, size], () => {
+  selectedRows.value = [];
+});
+usePageBounds(total, page, size);
 const columns = [
+  {
+    type: "selection",
+    width: 44,
+    selectable: (row: AlertRecord) => ["resolved", "event"].includes(row.state)
+  },
   { label: "告警", slot: "title", minWidth: 320 },
   { label: "类别与状态", slot: "state", minWidth: 150 },
   {
     label: "更新时间",
     minWidth: 200,
     formatter: (r: AlertRecord) => timeCN(r.updated_at, store.current?.timezone)
-  }
+  },
+  { label: "操作", slot: "action", width: 110, fixed: "right" }
 ];
 </script>
 <template>
@@ -44,11 +57,24 @@ const columns = [
       ></template
     ><el-alert v-if="error" :title="error" type="error" :closable="false" />
     <section class="surface">
+      <div class="table-toolbar">
+        <span class="toolbar-meta"
+          >已选择 {{ selectedRows.length }} 条 · 活动告警不可删除</span
+        ><HistoryActions
+          kind="alerts"
+          :ids="selectedRows.map(r => r.id)"
+          @changed="
+            selectedRows = [];
+            refresh();
+          "
+        />
+      </div>
       <pure-table
         :data="data?.items ?? []"
         :columns="columns"
         :loading="loading"
         row-key="id"
+        @selection-change="rows => (selectedRows = rows)"
         ><template #title="{ row }"
           ><el-button
             class="alert-title-link"
@@ -60,6 +86,14 @@ const columns = [
             "
             >{{ row.title.replace(/\n/g, " · ") }}</el-button
           ></template
+        ><template #action="{ row }"
+          ><HistoryActions
+            v-if="['resolved', 'event'].includes(row.state)"
+            kind="alerts"
+            :ids="[row.id]"
+            label="删除"
+            @changed="refresh"
+          /><span v-else class="muted">活动告警</span></template
         ><template #state="{ row }"
           ><StatusDot
             :text="alertState(row).text"

@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     BaseModel,
@@ -26,6 +27,7 @@ from .monitoring.models import Policy
 from .monitoring.repository import PolicyRepository
 from .redaction import redact_text
 from .upstream_throttle import RequestThrottle
+from .upstream_usage import UpstreamUsage
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -41,6 +43,7 @@ class UpstreamAccount(BaseModel):
     enabled: bool = False
     monitor_enabled: bool = False
     poll_seconds: int = Field(default=300, ge=30, le=86400)
+    usage_timezone: str = ""
     currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
     threshold_cny: Decimal = Field(
         default=Decimal("0"), ge=0, le=Decimal("1e15"), allow_inf_nan=False, decimal_places=12
@@ -52,6 +55,16 @@ class UpstreamAccount(BaseModel):
     notify_recovery: bool = True
     query_binding_ids: list[str] = Field(default_factory=list, max_length=20)
     notify_binding_ids: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("usage_timezone")
+    @classmethod
+    def valid_usage_timezone(cls, value: str) -> str:
+        if value:
+            try:
+                ZoneInfo(value)
+            except ZoneInfoNotFoundError:
+                raise ValueError("统计时区不存在") from None
+        return value
 
     @field_validator("base_url")
     @classmethod
@@ -93,6 +106,7 @@ class UpstreamAccounts:
     def __init__(self, runtime: "Runtime", accounts: list[UpstreamAccount]) -> None:
         self.runtime, self.accounts = runtime, accounts
         self.closed = False
+        self.usage = UpstreamUsage(runtime)
         self.locks: dict[str, asyncio.Lock] = {}
         self.clients: dict[str, NewAPIClient] = {}
         self.repo = PolicyRepository(runtime.store)
@@ -131,7 +145,7 @@ class UpstreamAccounts:
         ]
 
     def scope(self, account: UpstreamAccount) -> str:
-        config = account.model_dump(mode="json", exclude={"access_token", "name"})
+        config = account.model_dump(mode="json", exclude={"access_token", "name", "usage_timezone"})
         context = json.dumps(config, sort_keys=True) + account.access_token.get_secret_value()
         return hashlib.sha256(context.encode()).hexdigest()
 
@@ -190,12 +204,17 @@ class UpstreamAccounts:
             await self.runtime.store.get_meta("upstream:sample:" + self.scope(account)) or "null"
         )
         error = await self.runtime.store.get_meta("upstream:error:" + self.scope(account))
-        return {**account.public(), "sample": sample, "error": error or ""}
+        return {
+            **account.public(),
+            "sample": sample,
+            "error": error or "",
+            "usage": await self.usage.snapshot(account, self.scope(account)),
+        }
 
-    async def check(self, identifier: str, *, now: float | None = None) -> None:
+    async def check(self, identifier: str, *, now: float | None = None) -> bool:
         account = self.account(identifier)
         if not account.monitor_enabled:
-            return
+            return False
         now = time.time() if now is None else now
         key = "policy:upstream:" + self.scope(account)
         try:
@@ -205,7 +224,7 @@ class UpstreamAccounts:
                 await self.runtime.store.set_meta(
                     "upstream:error:" + self.scope(account), str(error)
                 )
-            return
+            return False
         quota = result["quota"]
         threshold = account.currency.to_quota(account.threshold_cny)
         recovery = account.currency.to_quota(
@@ -238,6 +257,7 @@ class UpstreamAccounts:
             evidence={"account_id": account.id, "quota": quota, "threshold": threshold},
             repeat_notifications=True,
         )
+        return True
 
     async def initialize(self) -> None:
         allowed = {self.scope(a) for a in self.accounts if a.enabled and a.monitor_enabled}
@@ -270,7 +290,12 @@ class UpstreamAccounts:
         try:
             async with self.slots:
                 if not self.closed:
-                    await self.check(identifier, now=now)
+                    success = await self.check(identifier, now=now)
+                    if success and not self.closed:
+                        account = self.account(identifier)
+                        await self.usage.query(
+                            account, self.clients[identifier], self.scope(account)
+                        )
         finally:
             self.inflight.pop(identifier, None)
 

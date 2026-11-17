@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePageBounds } from "@/composables/usePageBounds";
 import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
@@ -22,6 +23,7 @@ const { data, loading, error, refresh, total } = usePagedRemote<Page<UserInfo>>(
       : "",
   () => store.currentId
 );
+usePageBounds(total, page, size);
 const columns = [
   { label: "用户ID", prop: "id", width: 95 },
   { label: "用户", prop: "username", minWidth: 160 },

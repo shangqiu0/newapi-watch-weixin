@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import HistoryActions from "@/components/Console/HistoryActions.vue";
+import { usePageBounds } from "@/composables/usePageBounds";
 import { ref, watch } from "vue";
 import { useIntervalFn } from "@vueuse/core";
 import { usePlatformStore } from "@/store/modules/platform";
@@ -6,7 +8,6 @@ import { usePagedRemote } from "@/composables/usePagedRemote";
 import { request, perform } from "@/api/console";
 import type { QueryTask, Page } from "@/api/types";
 import { number, quotaText, timeCN } from "@/utils/format";
-import ConsolePage from "@/components/Console/ConsolePage.vue";
 import TrendChart from "@/components/Console/TrendChart.vue";
 const store = usePlatformStore(),
   page = ref(1),
@@ -64,7 +65,18 @@ async function action(
     busy.value = "";
   }
 }
+const selectedRows = ref<QueryTask[]>([]);
+watch([() => store.currentId, page, size], () => {
+  selectedRows.value = [];
+});
+usePageBounds(remote.total, page, size);
 const columns = [
+  {
+    type: "selection",
+    width: 44,
+    selectable: (row: QueryTask) =>
+      ["complete", "cancelled", "failed"].includes(row.status)
+  },
   { label: "查询任务", slot: "name", minWidth: 260 },
   { label: "状态", slot: "status", width: 130 },
   {
@@ -80,20 +92,11 @@ const columns = [
     formatter: (r: QueryTask) => number(r.progress.total_requests)
   },
   { label: "说明", prop: "error", minWidth: 220 },
-  { label: "操作", slot: "action", fixed: "right", width: 220 }
+  { label: "操作", slot: "action", fixed: "right", width: 300 }
 ];
 </script>
 <template>
-  <ConsolePage
-    title="查询任务"
-    description="精确历史查询在后台分批读取，进度落盘；优先保障渠道与余额监控，不长期保存原始业务日志"
-    @refresh="remote.refresh"
-  >
-    <template #actions
-      ><el-button :loading="remote.loading.value" @click="remote.refresh"
-        >刷新进度</el-button
-      ></template
-    >
+  <div class="settings-panel">
     <el-alert
       v-if="remote.error.value"
       :title="remote.error.value"
@@ -103,17 +106,33 @@ const columns = [
     <section class="surface">
       <div class="section-heading">
         <div>
-          <h2>平台查询队列</h2>
+          <h2>后台查询任务</h2>
           <p>
             任务按创建时的时间范围执行；暂停或未完成时不发布部分统计。可在按需统计页发起查询。
           </p>
         </div>
+        <el-button :loading="remote.loading.value" @click="remote.refresh"
+          >刷新进度</el-button
+        >
+      </div>
+      <div class="table-toolbar">
+        <span class="toolbar-meta"
+          >已选择 {{ selectedRows.length }} 条 · 运行任务须先取消</span
+        ><HistoryActions
+          kind="tasks"
+          :ids="selectedRows.map(r => r.id)"
+          @changed="
+            selectedRows = [];
+            remote.refresh();
+          "
+        />
       </div>
       <pure-table
         :data="remote.data.value?.items ?? []"
         :columns="columns"
         :loading="remote.loading.value"
         row-key="id"
+        @selection-change="rows => (selectedRows = rows)"
       >
         <template #name="{ row }"
           ><span class="mono">{{ row.id }}</span>
@@ -136,8 +155,15 @@ const columns = [
             >{{ labels[row.status as QueryTask["status"]] }}</el-tag
           ></template
         >
-        <template #action="{ row }"
-          ><el-button
+        <template #action="{ row }">
+          <HistoryActions
+            v-if="['complete', 'cancelled', 'failed'].includes(row.status)"
+            kind="tasks"
+            :ids="[row.id]"
+            label="删除"
+            @changed="remote.refresh"
+          />
+          <el-button
             v-if="['paused', 'failed'].includes(row.status)"
             link
             type="primary"
@@ -195,5 +221,5 @@ const columns = [
       />
       <p class="section-footnote">{{ selected.result.limitation }}</p>
     </section>
-  </ConsolePage>
+  </div>
 </template>

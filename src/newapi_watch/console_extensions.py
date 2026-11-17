@@ -22,6 +22,7 @@ from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .persistence import row, rows
 from .query_engine.api import query_routes
+from .retention_api import retention_routes
 from .upstream_api import upstream_routes
 
 
@@ -45,6 +46,7 @@ def console_extensions(
 
     router.include_router(query_routes(fleet))
     router.include_router(upstream_routes(control, fleet))
+    router.include_router(retention_routes(control, fleet))
 
     def wrap(data: Any, *, platform_id: str) -> dict[str, Any]:
         data = decorate_money(data, fleet.entry(platform_id).runtime.settings.currency)

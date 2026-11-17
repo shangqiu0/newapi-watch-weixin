@@ -79,7 +79,7 @@ async def record_alert(
         """INSERT INTO alerts(id,key,state,title,level,generation,created_at,updated_at)
         VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(key) DO UPDATE SET state=excluded.state,
         title=excluded.title,level=excluded.level,updated_at=excluded.updated_at,
-        generation=CASE WHEN alerts.state='resolved' AND excluded.state='firing' THEN alerts.generation+1 ELSE alerts.generation END""",
+        generation=CASE WHEN alerts.state IN ('resolved','event') AND excluded.state='firing' THEN alerts.generation+1 ELSE alerts.generation END""",
         (uuid4().hex, key, "firing" if active else "resolved", title, level, now, now),
     )
 

@@ -5,7 +5,27 @@ export interface LLM {
   model: string;
   has_api_key: boolean;
 }
+export interface RetentionConfig {
+  confirmed?: boolean;
+  enabled: boolean;
+  logs_days: number;
+  history_days: number;
+  tasks_days: number;
+  audits_days: number;
+}
+export interface DailyUsage {
+  status: "ok" | "error" | "unread";
+  quota?: number;
+  quota_display?: string;
+  timezone?: string;
+  start_at?: number;
+  end_at?: number;
+  queried_at?: number;
+  stale?: boolean;
+  error?: string;
+}
 export interface Platform {
+  retention?: RetentionConfig;
   currency?: Currency;
   revision?: number;
   updated_at?: number;
@@ -335,6 +355,8 @@ export interface MoneyFields {
   recovery_threshold_cny?: string | null;
 }
 export interface UpstreamAccount {
+  usage_timezone?: string;
+  usage?: DailyUsage;
   id: string;
   name: string;
   base_url: string;

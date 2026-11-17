@@ -13,7 +13,7 @@ import { store } from "@/store";
 import { usePlatformStoreHook } from "@/store/modules/platform";
 import NProgress from "@/utils/progress";
 export const constantRoutes: RouteRecordRaw[] = [routes as RouteRecordRaw];
-export const constantMenus = [routes, ...remaining];
+export const constantMenus = [...routes.children, ...remaining];
 export const remainingPaths = remaining.map(item => item.path);
 export const router = createRouter({
   history: createWebHistory(),

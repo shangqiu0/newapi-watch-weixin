@@ -79,7 +79,7 @@ docker compose -f compose.yaml -f compose.console.yaml up -d --no-deps watch
 docker compose -f compose.yaml -f compose.console.yaml down
 ```
 
-不要随意运行`down -v`，这会删除应用命名卷。重要数据是整个`/app/data/console`和其中的`master.key`，不是Redis缓存。数据库运行中备份应采用在线backup；也可停止应用后整体备份卷，包含SQLite的WAL状态。业务库当前v6、控制库v2，旧版本会拒绝更高schema；回滚需恢复备份，不要强改版本号。
+不要随意运行`down -v`，这会删除应用命名卷。重要数据是整个`/app/data/console`和其中的`master.key`，不是Redis缓存。数据库运行中备份应采用在线backup；也可停止应用后整体备份卷，包含SQLite的WAL状态。业务库当前v6、控制库v3，旧版本会拒绝更高schema；回滚需恢复备份，不要强改版本号。
 
 ## 本次验证范围
 

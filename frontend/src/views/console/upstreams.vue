@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePageBounds } from "@/composables/usePageBounds";
 import { ref, reactive, computed, watch } from "vue";
 import { ElMessageBox, ElMessage } from "element-plus";
 import { usePlatformStore } from "@/store/modules/platform";
@@ -35,6 +36,7 @@ function initial() {
     user_id: 1,
     access_token: "",
     enabled: false,
+    usage_timezone: "",
     monitor_enabled: false,
     poll_seconds: 300,
     currency: {
@@ -140,13 +142,24 @@ async function query(account: UpstreamAccount): Promise<void> {
     querying.value = "";
   }
 }
+usePageBounds(total, page, size);
 const columns = [
-  { label: "上游账户", slot: "account", minWidth: 210 },
-  { label: "可用余额（¥）", slot: "balance", minWidth: 190, align: "right" },
-  { label: "接入 / 监控", slot: "status", minWidth: 140 },
+  { label: "上游账户", slot: "account", minWidth: 190 },
+  { label: "可用余额（¥）", slot: "balance", minWidth: 160, align: "right" },
+  { label: "今日已用（¥）", slot: "usage", minWidth: 220, align: "right" },
+  { label: "接入 / 监控", slot: "status", minWidth: 120 },
   { label: "最近读取", slot: "time", minWidth: 200 },
-  { label: "操作", slot: "action", fixed: "right", width: 220 }
+  { label: "操作", slot: "action", fixed: "right", width: 200 }
 ];
+const visibleLabels = ref(columns.map(column => column.label));
+const displayedColumns = computed(() =>
+  columns.filter(
+    column =>
+      column.slot === "account" ||
+      column.slot === "action" ||
+      visibleLabels.value.includes(column.label)
+  )
+);
 </script>
 <template>
   <ConsolePage
@@ -161,8 +174,34 @@ const columns = [
     >
     <section class="surface">
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <div class="table-toolbar list-heading">
+        <span class="toolbar-meta"
+          >{{ total }} 个上游账户 · 今日消费独立统计</span
+        >
+        <el-popover placement="bottom-end" trigger="click" :width="220"
+          ><template #reference><el-button>列设置</el-button></template>
+          <div class="column-settings">
+            <strong>显示列</strong
+            ><el-checkbox-group v-model="visibleLabels"
+              ><el-checkbox
+                v-for="column in columns"
+                :key="column.label"
+                :value="column.label"
+                :disabled="['account', 'action'].includes(column.slot)"
+                >{{ column.label }}</el-checkbox
+              ></el-checkbox-group
+            ><el-button
+              link
+              type="primary"
+              @click="visibleLabels = columns.map(column => column.label)"
+              >恢复默认</el-button
+            >
+          </div>
+        </el-popover>
+      </div>
+      <p class="mobile-table-hint">左右滑动查看余额、今日用量与操作</p>
       <pure-table
-        :columns="columns"
+        :columns="displayedColumns"
         :data="data?.items ?? []"
         :loading="loading"
         row-key="id"
@@ -176,12 +215,37 @@ const columns = [
         <template #balance="{ row }"
           ><strong>{{ row.sample?.quota_display ?? "尚未读取" }}</strong>
           <div class="muted">
-            已用 {{ row.sample?.used_quota_display ?? "未提供" }}
+            累计已用 {{ row.sample?.used_quota_display ?? "未提供" }}
           </div>
           <div v-if="row.error" class="muted">
             读取失败，保留旧值：{{ row.error }}
           </div></template
         >
+        <template #usage="{ row }">
+          <strong class="amount-value">{{
+            row.usage?.quota_display ??
+            (row.usage?.status === "error" ? "读取失败" : "尚未读取")
+          }}</strong>
+          <div class="muted">
+            {{
+              row.usage?.timezone ||
+              row.usage_timezone ||
+              platform.current?.timezone
+            }}
+            · 零点至查询时
+          </div>
+          <div v-if="row.usage?.end_at" class="section-footnote">
+            截至 {{ timeCN(row.usage.end_at, row.usage.timezone) }}
+          </div>
+          <el-tooltip v-if="row.usage?.error" :content="row.usage.error"
+            ><el-tag type="warning" size="small" effect="plain">{{
+              row.usage.quota_display ? "旧值 · 统计读取失败" : "统计暂不可用"
+            }}</el-tag></el-tooltip
+          >
+          <span v-else-if="row.usage?.stale" class="section-footnote"
+            >缓存已过期，待刷新</span
+          >
+        </template>
         <template #status="{ row }"
           ><el-tag :type="row.enabled ? 'success' : 'info'">{{
             row.enabled ? "已启用" : "已停用"
@@ -200,7 +264,7 @@ const columns = [
             :disabled="!row.enabled || !!querying"
             :loading="querying === row.id"
             @click="query(row)"
-            >查余额</el-button
+            >刷新数据</el-button
           ><el-button link @click="edit(row)">编辑</el-button
           ><el-button link type="danger" @click="remove(row)"
             >删除</el-button
@@ -215,15 +279,16 @@ const columns = [
         layout="total,sizes,prev,pager,next"
       />
       <p class="section-footnote">
-        这里只读取 /api/user/self，不查询上游其他用户、不修改上游。Webhook
+        余额读取 /api/user/self，今日消费读取
+        /api/log/self/stat；不支持时显示原因，不扫描全量日志。Webhook
         是单向通知，不能接收聊天查询。机器人可发送“上游余额”或“上游余额
         账户名称”。
       </p>
     </section>
-    <el-dialog
+    <el-drawer
       v-model="dialog"
       :title="editing ? '编辑上游账户' : '新增上游账户'"
-      width="min(760px,96vw)"
+      size="min(720px,96vw)"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -255,6 +320,22 @@ const columns = [
           /></el-form-item>
         </div>
         <h3>人民币显示口径</h3>
+        <el-form-item label="今日统计时区"
+          ><el-select
+            v-model="form.usage_timezone"
+            filterable
+            allow-create
+            default-first-option
+            ><el-option
+              value=""
+              :label="`继承平台时区 · ${platform.current?.timezone ?? 'Asia/Shanghai'}`" /><el-option
+              value="Asia/Shanghai"
+              label="北京时间 · Asia/Shanghai" /><el-option
+              value="America/New_York"
+              label="美国东部 · America/New_York" /><el-option
+              value="UTC"
+              label="UTC" /></el-select
+        ></el-form-item>
         <CurrencyEditor
           v-model="form.currency"
           :preview-path="
@@ -323,6 +404,6 @@ const columns = [
           >
         </div>
       </el-form>
-    </el-dialog>
+    </el-drawer>
   </ConsolePage>
 </template>

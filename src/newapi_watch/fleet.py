@@ -73,6 +73,7 @@ class Fleet:
                     "newapi_user_id": config.newapi_user_id,
                     "timezone": config.timezone,
                     "currency": config.currency,
+                    "retention": config.retention,
                     "poll_seconds": config.poll_seconds,
                     "log_seconds": config.log_seconds,
                     "probe_enabled": False,
@@ -80,6 +81,13 @@ class Fleet:
                 }
             )
             runtime = Runtime(settings)
+
+            async def prune_operation_records() -> None:
+                await self.control.prune_operations(
+                    platform_id, time.time() - config.retention.audits_days * 86400
+                )
+
+            runtime.retention_callback = prune_operation_records
             runtime.upstream = UpstreamAccounts(runtime, config.upstream_accounts)
             runtime.commands.upstream = runtime.upstream
             try:
@@ -188,6 +196,13 @@ class Fleet:
                     runtime.tasks.append(
                         asyncio.create_task(
                             runtime.periodic("upstream-balances", 1, runtime.upstream.tick)
+                        )
+                    )
+                if self.start_tasks and not config.enabled:
+                    # Data housekeeping must not start remote monitoring for disabled platforms.
+                    runtime.tasks.append(
+                        asyncio.create_task(
+                            runtime.periodic("retention", 60, runtime.prune), name="retention"
                         )
                     )
                 self.failures.pop(platform_id, None)

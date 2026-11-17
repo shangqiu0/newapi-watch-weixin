@@ -1,15 +1,15 @@
 <script setup lang="ts">
+import { useSettingsDraft } from "@/composables/useSettingsDraft";
 import { reactive, ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { request, perform } from "@/api/console";
 import type { Diagnostic } from "@/api/types";
 import { timeCN } from "@/utils/format";
-import ConsolePage from "@/components/Console/ConsolePage.vue";
 import StatusDot from "@/components/Console/StatusDot.vue";
 const store = usePlatformStore(),
   saving = ref(false),
   testing = ref(false),
-  dirty = ref(false),
+  dirty = useSettingsDraft(),
   diagnostic = ref<Diagnostic | null>(null);
 const form = reactive({
   enabled: false,
@@ -19,11 +19,12 @@ const form = reactive({
   api_key: ""
 });
 watch(
-  () => store.overview,
-  data => {
-    if (!data) return;
-    Object.assign(form, data.platform.llm, { api_key: "" });
-    diagnostic.value = data.model_status;
+  () => [store.current, store.overview] as const,
+  ([platform, overview]) => {
+    const saved = overview?.platform ?? platform;
+    if (!saved || dirty.value) return;
+    Object.assign(form, saved.llm, { api_key: "" });
+    diagnostic.value = overview?.model_status ?? null;
     dirty.value = false;
   },
   { immediate: true }
@@ -41,8 +42,11 @@ async function save() {
         api_key: form.api_key
       }
     });
-    form.api_key = "";
-    if (store.currentId === id) await store.load(id);
+    if (store.currentId === id) {
+      form.api_key = "";
+      dirty.value = false;
+      await store.load(id);
+    }
   }, "模型设置已保存，当前平台机器人已加载新配置");
   saving.value = false;
 }
@@ -60,10 +64,8 @@ async function test() {
 }
 </script>
 <template>
-  <ConsolePage
-    title="模型服务"
-    description="OpenAI Chat Completions 协议；先读取本平台真实数据，再组织回答"
-    ><div class="settings-grid">
+  <div class="settings-panel">
+    <div class="settings-grid">
       <section class="surface">
         <div class="section-heading">
           <h2>接口配置</h2>
@@ -193,6 +195,6 @@ async function test() {
           DeepSeek 专有参数。保留你在服务方实际可用的模型 ID
         </div>
       </aside>
-    </div></ConsolePage
-  >
+    </div>
+  </div>
 </template>

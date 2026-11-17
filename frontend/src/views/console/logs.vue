@@ -62,6 +62,8 @@ const columns = [
     description="向绑定平台按页查询；HTTP状态码采用有界错误日志扫描，可继续读取，不伪造全量总数"
     @refresh="refresh"
     ><template #actions
+      ><el-button @click="$router.push('/console/settings?tab=data')"
+        >本地数据保留</el-button
       ><el-button :loading="loading" @click="refresh"
         >重新查询</el-button
       ></template

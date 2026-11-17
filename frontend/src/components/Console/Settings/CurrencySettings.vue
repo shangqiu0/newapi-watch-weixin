@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { useSettingsDraft } from "@/composables/useSettingsDraft";
 import { ref, watch } from "vue";
 import { request, perform } from "@/api/console";
 import { usePlatformStore } from "@/store/modules/platform";
 import type { Currency } from "@/api/types";
-import ConsolePage from "@/components/Console/ConsolePage.vue";
 import CurrencyEditor from "@/components/Console/CurrencyEditor.vue";
 const platform = usePlatformStore();
 const currency = ref<Currency>({
@@ -13,9 +13,18 @@ const currency = ref<Currency>({
   source: "manual"
 });
 const saving = ref(false);
+const dirty = useSettingsDraft();
+watch(
+  currency,
+  () => {
+    dirty.value = true;
+  },
+  { deep: true, flush: "sync" }
+);
 watch(
   () => platform.current,
   current => {
+    if (dirty.value) return;
     currency.value = current?.currency
       ? { ...current.currency }
       : {
@@ -24,6 +33,7 @@ watch(
           usd_exchange_rate: "1",
           source: "manual"
         };
+    dirty.value = false;
   },
   { immediate: true }
 );
@@ -34,7 +44,10 @@ async function save(): Promise<void> {
   try {
     await perform(async () => {
       await request(`/platforms/${id}`, "PATCH", { currency: currency.value });
-      await platform.load();
+      if (platform.currentId === id) {
+        dirty.value = false;
+        await platform.load(id);
+      }
     }, "人民币显示设置已保存；原始 quota 阈值保持不变");
   } finally {
     saving.value = false;
@@ -42,10 +55,7 @@ async function save(): Promise<void> {
 }
 </script>
 <template>
-  <ConsolePage
-    title="金额显示"
-    description="跟随当前平台的人民币额度口径；用户余额、消耗、告警与聊天回复使用同一套参数"
-  >
+  <div class="settings-panel">
     <section class="surface form-section">
       <h2>当前平台 · 人民币额度</h2>
       <el-alert
@@ -78,5 +88,5 @@ async function save(): Promise<void> {
         单位未确认，不自动套用此公式。
       </p>
     </section>
-  </ConsolePage>
+  </div>
 </template>

@@ -246,7 +246,7 @@ async def test_registry_v1_upgrade_preserves_existing_encrypted_config_and_reope
     try:
         assert await control.platforms() == []
         async with control.transaction() as db:
-            assert (await row(db, "PRAGMA user_version"))["user_version"] == 2
+            assert (await row(db, "PRAGMA user_version"))["user_version"] == 3
             assert (await row(db, "SELECT config FROM platforms WHERE id='old'"))[
                 "config"
             ] == encoded

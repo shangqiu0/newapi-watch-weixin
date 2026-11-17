@@ -4,7 +4,8 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -108,6 +109,42 @@ def create_console(
             )
         return identity
 
+    @app.middleware("http")
+    async def management_operations(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        params = request.path_params
+        route = request.scope.get("route")
+        template = getattr(route, "path", "")
+        skip = (
+            "cleanup-previews",
+            "currency-previews",
+            "model-checks",
+            "statistics-queries",
+            "balance-queries",
+        )
+        if (
+            request.method not in {"GET", "HEAD", "OPTIONS"}
+            and 200 <= response.status_code < 300
+            and template.startswith("/console/api/platforms/")
+            and not any(v in template for v in skip)
+        ):
+            platform_id = str(params.get("platform_id", ""))
+            if platform_id:
+                object_id = next(
+                    (
+                        str(params[k])
+                        for k in ("binding_id", "account_id", "identifier")
+                        if k in params
+                    ),
+                    platform_id,
+                )
+                await control.record_operation(
+                    platform_id, request.method + " " + template, object_id
+                )
+        return response
+
     @app.get("/health/live")
     async def live() -> dict[str, Any]:
         return envelope({"status": "alive", "mode": "console", "demo": fleet.demo})
@@ -185,6 +222,10 @@ def create_console(
     @app.patch("/console/api/platforms/{platform_id}", dependencies=[Depends(session)])
     async def update(platform_id: str, payload: PlatformPatch) -> dict[str, Any]:
         saved = await control.patch_platform(platform_id, payload)
+        if payload.retention is not None:
+            await fleet.entry(platform_id).runtime.store.set_meta(
+                "retention:next_at", str(time.time() + 3600)
+            )
         await fleet.reload(platform_id, reset_model_diagnostic=payload.llm is not None)
         return envelope(saved)
 

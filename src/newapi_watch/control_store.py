@@ -31,6 +31,7 @@ class ControlStore:
         self.path = directory / "control.sqlite3"
         self.db: aiosqlite.Connection | None = None
         self.lock = asyncio.Lock()
+        self.mutation_locks: dict[str, asyncio.Lock] = {}
         self.vault: Vault
 
     async def open(self) -> None:
@@ -104,6 +105,7 @@ class ControlStore:
         result["monitoring"] = config.get("monitoring", {})
         parsed = PlatformInput.model_validate(config)
         result["currency"] = parsed.currency.model_dump(mode="json")
+        result["retention"] = parsed.retention.model_dump(mode="json")
         result["upstream_accounts"] = [a.public() for a in parsed.upstream_accounts]
         return result
 
@@ -145,12 +147,21 @@ class ControlStore:
         return await self.platform(identifier)
 
     async def patch_platform(self, identifier: str, patch: PlatformPatch) -> dict[str, Any]:
+        # Serialize read/merge/validate/write, not just the final SQL transaction.
+        # Different settings sections must not restore a stale copy of each other.
+        async with self.mutation_locks.setdefault(identifier, asyncio.Lock()):
+            return await self._patch_platform(identifier, patch)
+
+    async def _patch_platform(self, identifier: str, patch: PlatformPatch) -> dict[str, Any]:
         previous = await self.platform_config(identifier)
         values = plaintext(previous)
         changes = plaintext(patch)
         for key, value in changes.items():
             if value is None or (key == "newapi_token" and not value):
                 continue
+            if key == "retention":
+                # Explicitly saving this section confirms the expanded history retention scope.
+                value["confirmed"] = True
             if key == "llm":
                 if not value["api_key"]:
                     value["api_key"] = values["llm"]["api_key"]
@@ -358,3 +369,37 @@ class ControlStore:
             except aiosqlite.IntegrityError:
                 raise ControlError(409, "该机器人已被其他活跃绑定使用") from None
         return await self.binding(platform_id, binding_id)
+
+    async def record_operation(self, platform_id: str, action: str, object_id: str = "") -> None:
+        now = time.time()
+        async with self.transaction() as db:
+            await db.execute(
+                "INSERT INTO operation_records(id,platform_id,action,object_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (uuid4().hex, platform_id, action[:256], object_id[:128], now, now),
+            )
+
+    async def operation_records(
+        self, platform_id: str, *, page: int = 1, page_size: int = 20
+    ) -> dict[str, Any]:
+        from .operations import Page
+
+        paging = Page(page=page, page_size=page_size)
+        async with self.transaction() as db:
+            count = await row(
+                db,
+                "SELECT COUNT(*) AS n FROM operation_records WHERE platform_id=?",
+                (platform_id,),
+            )
+            items = await rows(
+                db,
+                "SELECT id,action,object_id,outcome,created_at FROM operation_records WHERE platform_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
+                (platform_id, paging.page_size, paging.offset),
+            )
+        return {"items": items, "total": count["n"] if count else 0, **paging.model_dump()}
+
+    async def prune_operations(self, platform_id: str, before: float) -> None:
+        async with self.transaction() as db:
+            await db.execute(
+                "DELETE FROM operation_records WHERE id IN (SELECT id FROM operation_records WHERE platform_id=? AND created_at<? ORDER BY created_at LIMIT 500)",
+                (platform_id, before),
+            )

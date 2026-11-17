@@ -34,13 +34,16 @@ class Operations:
     async def alerts(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         paging = Page(page=page, page_size=page_size)
         async with self.store.transaction() as db:
-            count = await row(db, "SELECT COUNT(*) AS total FROM alerts")
+            hidden = "NOT EXISTS (SELECT 1 FROM metadata WHERE id='history:hidden:'||a.id AND value=CAST(a.generation AS TEXT))"
+            count = await row(db, "SELECT COUNT(*) AS total FROM alerts a WHERE " + hidden)
             items = await rows(
                 db,
                 """SELECT a.id,a.key,a.state,a.title,a.level,a.generation,a.created_at,a.updated_at,
                 CASE WHEN k.id IS NULL THEN 0 ELSE 1 END AS acknowledged
                 FROM alerts a LEFT JOIN alert_acknowledgements k ON k.alert_id=a.id AND k.generation=a.generation
-                ORDER BY a.updated_at DESC,a.id LIMIT ? OFFSET ?""",
+                WHERE """
+                + hidden
+                + """ ORDER BY a.updated_at DESC,a.id LIMIT ? OFFSET ?""",
                 (paging.page_size, paging.offset),
             )
         for item in items:

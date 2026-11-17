@@ -7,13 +7,16 @@ vi.mock("@/api/console", () => ({
   request: vi.fn(),
   perform: async (fn: () => Promise<unknown>) => fn()
 }));
-vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useRoute: () => ({ query: {} })
+}));
 vi.mock("../src/components/Console/TrendChart.vue", () => ({
   default: { template: "<div />" }
 }));
 import { request } from "@/api/console";
 import { usePlatformStore } from "../src/store/modules/platform";
-import QueryTasks from "../src/views/console/tasks.vue";
+import QueryTasks from "../src/components/Console/QueryTasksPanel.vue";
 import Statistics from "../src/views/console/statistics.vue";
 const fixture = {
   id: "q_" + "a".repeat(32),
