@@ -449,3 +449,77 @@ async def test_web_channel_query_reuses_latest_monitor_result(tmp_path):
     finally:
         await runtime.close()
         await http.aclose()
+
+
+async def test_error_burst_pages_pause_and_resume_without_stuck_cursor(tmp_path):
+    """A burst spanning several pages pauses within the budget, advances the
+    cursor checkpoint, resumes on the next tick, and never re-alerts seen logs."""
+    requests: list[dict] = []
+    failing = False
+
+    def upstream(request):
+        requests.append(dict(request.url.params))
+        if failing:
+            return httpx.Response(429)
+        page = int(request.url.params["p"])
+        items = [
+            {
+                "id": 100 * page + i,
+                "created_at": 1000 + page,
+                "type": 5,
+                "channel": 7,
+                "http_status": 500,
+                "other": {"status_code": 500},
+                "content": "boom",
+            }
+            for i in range(3)
+        ]
+        return httpx.Response(
+            200, json={"success": True, "data": {"items": items, "total": 9}}
+        )
+
+    config = {
+        "channels": {"enabled": False},
+        "errors": {"enabled": True, "poll_seconds": 30, "window_seconds": 300},
+    }
+    runtime, http, service = await setup(tmp_path, upstream, config)
+    try:
+        await service.tick(now=1000)
+        await service.tick(now=1030)
+        # Full 9 records over 3 pages; cursor completes the window.
+        cursor = await runtime.store.get_meta("policy:error_cursor")
+        assert cursor == "1030"
+        assert (await service.snapshot(now=1031))["checks"][1]["status"] == "ok"
+        alerts_after_first = len(await runtime.store.notifications())
+        assert alerts_after_first >= 1
+
+        # Next window: budget exhaustion inside the scan pauses, not fails.
+        # Simulate by a 429 in the next window: it must remain unknown (not
+        # silently healthy) with the cursor unchanged.
+        failing = True
+        await service.tick(now=1360)
+        assert await runtime.store.get_meta("policy:error_cursor") == "1030"
+        checks = (await service.snapshot(now=1361))["checks"]
+        log_check = next(c for c in checks if c["id"] == "errors")
+        assert log_check["status"] == "unknown" and "429" in log_check["error"]
+
+        # Recovery: the paused path never leaves failures stuck at 21+; the
+        # next successful tick resets the streak and re-alerts are deduped.
+        failing = False
+        # 429 imposed a 60s real-time cooldown; clear it as production would
+        # naturally expire it long before the operator looks again.
+        runtime.client.throttle.blocked_until = 0.0
+        runtime.client.throttle.penalties = 0
+        await service.tick(now=1460)
+        # Window is capped at cursor+300s (1030..1330); it completes fully.
+        cursor = await runtime.store.get_meta("policy:error_cursor")
+        assert cursor == "1330"
+        check = (await service.snapshot(now=1461))["checks"][1]
+        assert check["status"] == "ok" and check["failures"] == 0
+        # error_seen dedup: the resumed window re-fetches the same log ids,
+        # they are deduped, pending_count stays 0, and no duplicate alert is
+        # enqueued even though the cooldown has expired.
+        assert len(await runtime.store.notifications()) == alerts_after_first
+    finally:
+        await runtime.close()
+        await http.aclose()

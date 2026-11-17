@@ -216,6 +216,24 @@ class NewAPIClient:
                 "page_size": self.settings.page_size,
             },
         )
+        return await self._parse_log_page(payload, page)
+
+    async def log_page_error(self, start: int, end: int, page: int, *, log_type: int = 5) -> LogPage:
+        if not 1 <= page <= self.settings.max_pages:
+            raise UpstreamError("错误日志超过分页上限，未生成不完整报告")
+        payload = await self.request(
+            "/api/log/",
+            {
+                "start_timestamp": start,
+                "end_timestamp": end,
+                "type": log_type,
+                "p": page,
+                "page_size": self.settings.page_size,
+            },
+        )
+        return await self._parse_log_page(payload, page)
+
+    async def _parse_log_page(self, payload: dict[str, Any], page: int) -> LogPage:
         data = payload.get("data")
         total = size = None
         if isinstance(data, list):
