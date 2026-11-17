@@ -56,6 +56,25 @@ class RetentionService:
     def __init__(self, store: Store) -> None:
         self.store = store
 
+    async def log_status(self, config: RetentionConfig) -> dict[str, Any]:
+        last = json.loads(await self.store.get_meta("retention:last_run") or "null")
+        deleted = last.get("deleted", {}) if last else {}
+        last_deleted = (
+            deleted.get("logs", 0)
+            if isinstance(deleted, dict)
+            else deleted
+            if last and last.get("kind") == "logs"
+            else 0
+        )
+        return {
+            "enabled": config.enabled,
+            "logs_days": config.logs_days,
+            "scope": "local_only",
+            "next_check_at": float(await self.store.get_meta("retention:next_at") or 0) or None,
+            "last_run_at": last.get("finished_at") if last else None,
+            "last_deleted": last_deleted,
+        }
+
     @staticmethod
     def selector(selection: CleanupSelection) -> tuple[str, tuple[Any, ...]]:
         conditions: list[str] = []
@@ -215,6 +234,59 @@ class RetentionService:
         cutoff = max(float(previous["value"]) if previous else 0, before)
         await self.store.put_meta(db, "log_coverage_start", str(int(cutoff)), now)
 
+    async def _maintenance(
+        self, config: RetentionConfig, now: float
+    ) -> tuple[dict[str, int], bool]:
+        # Auxiliary lifecycle tables are bounded too. A full batch must trigger
+        # the same 60s catch-up as business history, rather than silently drip
+        # at 1000 records/hour during a burst.
+        queries: list[tuple[str, str, tuple[Any, ...]]] = [
+            (
+                "receipts",
+                "DELETE FROM receipts WHERE id IN (SELECT id FROM receipts WHERE expires_at<? LIMIT 1000)",
+                (now,),
+            ),
+            (
+                "previews",
+                "DELETE FROM metadata WHERE id IN (SELECT id FROM metadata WHERE id LIKE 'retention:preview:%' AND updated_at<? LIMIT 1000)",
+                (now - 86400,),
+            ),
+        ]
+        if config.enabled:
+            cutoff = now - max(7, config.logs_days) * 86400
+            queries.extend(
+                [
+                    (
+                        "probes",
+                        "DELETE FROM probes WHERE id IN (SELECT id FROM probes WHERE created_at<? LIMIT 1000)",
+                        (now - config.logs_days * 86400,),
+                    ),
+                    # An unfinished scan may replay older pages after upstream
+                    # pagination changes. Retain its dedupe until it completes.
+                    (
+                        "error_seen",
+                        "DELETE FROM error_seen WHERE id IN (SELECT id FROM error_seen WHERE updated_at<? AND NOT EXISTS(SELECT 1 FROM metadata WHERE id='policy:error_scan') LIMIT 1000)",
+                        (cutoff,),
+                    ),
+                    (
+                        "error_buckets",
+                        "DELETE FROM error_buckets WHERE id IN (SELECT id FROM error_buckets WHERE pending_count=0 AND updated_at<? LIMIT 1000)",
+                        (cutoff,),
+                    ),
+                ]
+            )
+        deleted = {}
+        for kind, sql, params in queries:
+            async with self.store.transaction() as db:
+                cursor = await db.execute(sql, params)
+                deleted[kind] = max(0, cursor.rowcount)
+        async with self.store.transaction() as db:
+            expired = await db.execute(
+                "UPDATE query_jobs SET status='cancelled',error='任务已超过7天有效期',updated_at=? WHERE id IN (SELECT id FROM query_jobs WHERE status IN ('queued','running','waiting','paused') AND created_at<? LIMIT 1000)",
+                (now, now - 7 * 86400),
+            )
+        return deleted, expired.rowcount >= 1000 or any(n >= 1000 for n in deleted.values())
+
     async def prune(self, config: RetentionConfig, *, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         deleted: dict[str, int] = {}
@@ -240,39 +312,14 @@ class RetentionService:
                     if time.monotonic() >= deadline:
                         backlog = True
                         break
-            async with self.store.transaction() as db:
-                await db.execute(
-                    "DELETE FROM probes WHERE id IN (SELECT id FROM probes WHERE created_at<? LIMIT 1000)",
-                    (now - config.logs_days * 86400,),
-                )
-                # Error dedupe has its own lifecycle, never shorter than seven days (lookback <= one hour).
-                await db.execute(
-                    "DELETE FROM error_seen WHERE id IN (SELECT id FROM error_seen WHERE updated_at<? LIMIT 1000)",
-                    (now - max(7, config.logs_days) * 86400,),
-                )
-                await db.execute(
-                    "DELETE FROM error_buckets WHERE id IN (SELECT id FROM error_buckets WHERE pending_count=0 AND updated_at<? LIMIT 1000)",
-                    (now - max(7, config.logs_days) * 86400,),
-                )
-        async with self.store.transaction() as db:
-            await db.execute(
-                "UPDATE query_jobs SET status='cancelled',error='任务已超过7天有效期',updated_at=? WHERE status IN ('queued','running','waiting','paused') AND created_at<?",
-                (now, now - 7 * 86400),
-            )
-            await db.execute(
-                "DELETE FROM receipts WHERE id IN (SELECT id FROM receipts WHERE expires_at<? LIMIT 1000)",
-                (now,),
-            )
-            await db.execute(
-                "DELETE FROM metadata WHERE id IN (SELECT id FROM metadata WHERE id LIKE 'retention:preview:%' AND updated_at<? LIMIT 1000)",
-                (now - 86400,),
-            )
-            result = {
-                "deleted": deleted,
-                "finished_at": now,
-                "automatic": True,
-                "enabled": config.enabled,
-                "backlog": backlog,
-            }
-            await self.store.put_meta(db, "retention:last_run", json.dumps(result), now)
+        auxiliary, more = await self._maintenance(config, now)
+        deleted.update(auxiliary)
+        result = {
+            "deleted": deleted,
+            "finished_at": now,
+            "automatic": True,
+            "enabled": config.enabled,
+            "backlog": backlog or more,
+        }
+        await self.store.set_meta("retention:last_run", json.dumps(result))
         return result

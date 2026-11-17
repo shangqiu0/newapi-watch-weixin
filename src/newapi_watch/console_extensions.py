@@ -22,6 +22,7 @@ from .operations import OperationError
 from .periods import StatisticsQuery, parse_period
 from .persistence import row, rows
 from .query_engine.api import query_routes
+from .retention import RetentionConfig, RetentionService
 from .retention_api import retention_routes
 from .upstream_api import upstream_routes
 
@@ -180,12 +181,19 @@ def console_extensions(
         cursor: str = Query("", max_length=64),
     ) -> dict[str, Any]:
         runtime = entry(platform_id).runtime
+        retention = await RetentionService(runtime.store).log_status(
+            runtime.settings.retention or RetentionConfig(logs_days=runtime.settings.retention_days)
+        )
+
+        def log_response(data: dict[str, Any], *, platform_id: str) -> dict[str, Any]:
+            return wrap({**data, "retention": retention}, platform_id=platform_id)
+
         bounds = parse_period(
             period, today=datetime.now(ZoneInfo(runtime.settings.timezone)).date()
         )
         start, end = bounds.window(runtime.settings.timezone)
         if live and (http_status or cursor):
-            return wrap(
+            return log_response(
                 await runtime.error_search.search(
                     start,
                     end,
@@ -197,7 +205,7 @@ def console_extensions(
                 platform_id=platform_id,
             )
         if live:
-            return wrap(
+            return log_response(
                 await runtime.commands.data.logs(
                     start,
                     end,
@@ -220,7 +228,7 @@ def console_extensions(
                 + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
                 (*params, page_size, (page - 1) * page_size),
             )
-        return wrap(
+        return log_response(
             {
                 "items": items,
                 "total": count["total"] if count else 0,

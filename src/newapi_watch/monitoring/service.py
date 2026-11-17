@@ -15,6 +15,7 @@ from ..client import UpstreamError
 from ..models import LogRecord
 from ..persistence import enqueue, row, rows
 from ..redaction import redact_text
+from .error_scans import SCAN_KEY, ErrorScan
 from .models import ErrorRule, MonitoringConfig
 
 if TYPE_CHECKING:
@@ -95,7 +96,14 @@ class MonitoringService:
 
         self.report_jobs = ScheduledReports(runtime)
 
-    async def errors(self, records: list[LogRecord], *, now: float | None = None) -> None:
+    async def errors(
+        self,
+        records: list[LogRecord],
+        *,
+        now: float | None = None,
+        checkpoint: ErrorScan | None = None,
+        complete: bool = False,
+    ) -> None:
         rule = self.config.errors
         if not rule.enabled:
             return
@@ -187,6 +195,18 @@ class MonitoringService:
                     "UPDATE error_buckets SET pending_count=0,last_sent_at=?,updated_at=? WHERE id=?",
                     (now, now, bucket["id"]),
                 )
+
+            if checkpoint is not None:
+                if complete:
+                    await db.execute("DELETE FROM metadata WHERE id=?", (SCAN_KEY,))
+                    await self.runtime.store.put_meta(
+                        db, "policy:error_cursor", str(checkpoint.end), now
+                    )
+                    await self.runtime.store.put_meta(db, "logs_last_ok", str(now), now)
+                else:
+                    await self.runtime.store.put_meta(
+                        db, SCAN_KEY, checkpoint.model_dump_json(), now
+                    )
 
     async def balances(self, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
@@ -290,6 +310,7 @@ class MonitoringService:
                             (f"policy:balance:{rule.user_id}",),
                         )
                 if prior.errors != config.errors:
+                    await db.execute("DELETE FROM metadata WHERE id=?", (SCAN_KEY,))
                     await db.execute(
                         "UPDATE error_buckets SET pending_count=0 WHERE id LIKE 'policy-errors-v1:%'"
                     )

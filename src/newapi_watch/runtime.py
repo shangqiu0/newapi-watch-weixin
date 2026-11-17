@@ -96,7 +96,7 @@ class Runtime:
         self.tasks: list[asyncio.Task[Any]] = []
         self.stop = asyncio.Event()
         self.policies: MonitoringService | None = None
-        self.retention_callback: Callable[[], Awaitable[None]] | None = None
+        self.retention_callback: Callable[[], Awaitable[int]] | None = None
         self.upstream: Any = None
         self.commands.upstream = None
 
@@ -219,9 +219,14 @@ class Runtime:
             audits_days=self.settings.retention_days,
         )
         async with self.query_engine.jobs.lock:
-            result = await RetentionService(self.store).prune(config)
+            result = await RetentionService(self.store).prune(config, now=now)
         if config.enabled and self.retention_callback:
-            await self.retention_callback()
+            count = await self.retention_callback()
+            result["deleted"]["operations"] = count
+            result["backlog"] = result["backlog"] or count >= 500
+            # Central operation records are a separate DB. Include their batch
+            # in the same visible run and retry a backlog after 60s, not 1h.
+            await self.store.set_meta("retention:last_run", json.dumps(result))
         await self.store.set_meta(
             "retention:next_at", str(time.time() + (60 if result["backlog"] else 3600))
         )

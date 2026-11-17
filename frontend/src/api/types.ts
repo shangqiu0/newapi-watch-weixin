@@ -13,6 +13,14 @@ export interface RetentionConfig {
   tasks_days: number;
   audits_days: number;
 }
+export interface LogRetention {
+  enabled: boolean;
+  logs_days: number;
+  scope: "local_only";
+  next_check_at: number | null;
+  last_run_at: number | null;
+  last_deleted: number;
+}
 export interface DailyUsage {
   status: "ok" | "error" | "unread";
   quota?: number;

@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from ..client import UpstreamError
-from ..models import LogPage
 from ..redaction import redact_text
 from ..upstream_throttle import request_priority
 from .checks import StateChecks, timestamp
+from .error_scans import ErrorScanner
 from .repository import PolicyRepository
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ class PolicyEngine:
             ) + f"\n时间：{timestamp(now)}"
             await self.repo.condition(
                 f"policy:source:{key}",
-                bool(error),
+                None if pending else bool(error),
                 text,
                 policy,
                 "service",
@@ -204,73 +204,7 @@ class PolicyEngine:
             )
 
     async def errors(self, now: float) -> dict[str, Any]:
-        c = self.service.config.errors
-        cursor = await self.runtime.store.get_meta("policy:error_cursor")
-        if cursor is None and not c.initial_lookback_seconds:
-            await self.runtime.store.set_meta("policy:error_floor", str(int(now)))
-            await self.runtime.store.set_meta("policy:error_cursor", str(int(now)))
-            return {"baseline": int(now), "records": 0, "note": "从当前时刻监控，不追发旧错误"}
-        cursor_at = int(cursor) if cursor else max(0, int(now) - c.initial_lookback_seconds)
-        end = min(int(now), cursor_at + c.window_seconds)
-        start = max(0, cursor_at - c.overlap_seconds)
-        # Page-by-page with a cursor checkpoint: a burst larger than the 45s
-        # budget pauses the scan instead of failing it, so the cursor always
-        # advances and the next tick resumes from the last completed page.
-        # Resuming re-queries the same window with a fresh overlap; the
-        # error_seen dedup table absorbs the overlap records.
-        records: list[Any] = []
-        page = 1
-        deadline = 40.0
-        began = time.monotonic()
-        paused = False
-        through = end
-        floor = int(await self.runtime.store.get_meta("policy:error_floor") or str(start))
-        window_floor = max(start, floor)
-        while page <= self.runtime.client.settings.max_pages:
-            if time.monotonic() - began > deadline:
-                paused = page > 1
-                break
-            page_result: LogPage = await self.runtime.client.log_page_error(
-                start, end, page, log_type=5
-            )
-            fresh = [r for r in page_result.items if window_floor <= r.created_at <= end]
-            records.extend(fresh)
-            through = max(through, max((r.created_at for r in fresh), default=0))
-            if paused:
-                # Deliver what this budget completed before checkpointing, so
-                # a pause never discards already-fetched records.
-                await self.service.errors(records, now=now)
-                records = []
-            total = page_result.total
-            if total is not None and len(records) >= total:
-                break
-            if page_result.total is None and (
-                not page_result.items
-                or len(page_result.items) < self.runtime.client.settings.page_size
-            ):
-                break
-            page += 1
-        else:
-            raise UpstreamError("错误日志超过分页上限，请检查窗口积压")
-        if paused:
-            await self.runtime.store.set_meta("policy:error_cursor", str(min(through, end)))
-            return {
-                "from_timestamp": start,
-                "through_timestamp": through,
-                "lag_seconds": max(0, int(now) - through),
-                "records": len(records),
-                "paused": True,
-            }
-        await self.service.errors(records, now=now)
-        await self.runtime.store.set_meta("policy:error_cursor", str(end))
-        await self.runtime.store.set_meta("logs_last_ok", str(now))
-        return {
-            "from_timestamp": start,
-            "through_timestamp": end,
-            "lag_seconds": max(0, int(now) - end),
-            "records": len(records),
-            "complete": True,
-        }
+        return await ErrorScanner(self.service).advance(now, clock=time.monotonic)
 
     async def report(self, kind: str, now: float, *, retry: bool = False) -> dict[str, Any]:
         return await self.service.reports(

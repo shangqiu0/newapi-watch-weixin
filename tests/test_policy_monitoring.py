@@ -451,9 +451,8 @@ async def test_web_channel_query_reuses_latest_monitor_result(tmp_path):
         await http.aclose()
 
 
-async def test_error_burst_pages_pause_and_resume_without_stuck_cursor(tmp_path):
-    """A burst spanning several pages pauses within the budget, advances the
-    cursor checkpoint, resumes on the next tick, and never re-alerts seen logs."""
+async def test_error_pages_429_recovery_deduplicates_all_accepted_records(tmp_path):
+    """Small complete scans plus 429 recovery; budget exhaustion is tested separately."""
     requests: list[dict] = []
     failing = False
 
@@ -491,9 +490,8 @@ async def test_error_burst_pages_pause_and_resume_without_stuck_cursor(tmp_path)
         alerts_after_first = len(await runtime.store.notifications())
         assert alerts_after_first >= 1
 
-        # Next window: budget exhaustion inside the scan pauses, not fails.
-        # Simulate by a 429 in the next window: it must remain unknown (not
-        # silently healthy) with the cursor unchanged.
+        # 429 is a source failure, not a budget pause. It must stay unknown
+        # with the completed-window cursor unchanged.
         failing = True
         await service.tick(now=1360)
         assert await runtime.store.get_meta("policy:error_cursor") == "1030"
@@ -514,10 +512,18 @@ async def test_error_burst_pages_pause_and_resume_without_stuck_cursor(tmp_path)
         assert cursor == "1330"
         check = (await service.snapshot(now=1461))["checks"][1]
         assert check["status"] == "ok" and check["failures"] == 0
-        # error_seen dedup: the resumed window re-fetches the same log ids,
-        # they are deduped, pending_count stays 0, and no duplicate alert is
-        # enqueued even though the cooldown has expired.
-        assert len(await runtime.store.notifications()) == alerts_after_first
+        # Each page is accepted atomically. The first page alerted 3 errors;
+        # the other 6 remained in its cooldown bucket and may now be flushed.
+        # Across both notifications exactly 9 events were counted, not 18.
+        messages = await runtime.store.notifications()
+        assert len(messages) == alerts_after_first + 1
+        assert "累计：3 次" in messages[0]["content"]
+        assert "累计：6 次" in messages[1]["content"]
+        async with runtime.store.transaction() as db:
+            assert (await row(db, "SELECT COUNT(*) AS n FROM error_seen"))["n"] == 9
+            assert (await row(db, "SELECT SUM(pending_count) AS n FROM error_buckets"))["n"] == 0
+        await service.tick(now=1800)
+        assert len(await runtime.store.notifications()) == len(messages)
     finally:
         await runtime.close()
         await http.aclose()

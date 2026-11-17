@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, watch, ref } from "vue";
+import { computed, reactive, watch, ref } from "vue";
 import { ElMessageBox } from "element-plus";
 import { usePlatformStore } from "@/store/modules/platform";
 import { useRemote } from "@/composables/useRemote";
@@ -14,6 +14,7 @@ interface Management {
   last_run: {
     finished_at: number;
     deleted: Record<string, number> | number;
+    backlog?: boolean;
   } | null;
   next_check_at?: number | null;
 }
@@ -23,6 +24,30 @@ const store = usePlatformStore(),
 const remote = useRemote<Management>(() =>
   store.currentId ? `/platforms/${store.currentId}/data-management` : ""
 );
+const cleanupNames: Record<string, string> = {
+  logs: "本地日志",
+  notifications: "通知",
+  alerts: "历史告警",
+  tasks: "查询任务",
+  audits: "命令记录",
+  operations: "操作记录",
+  probes: "探测记录",
+  error_seen: "错误去重记录",
+  error_buckets: "已清空错误桶",
+  receipts: "传输收据",
+  previews: "清理预览"
+};
+const cleanupSummary = computed(() => {
+  const deleted = remote.data.value?.last_run?.deleted;
+  if (deleted === undefined) return "";
+  if (typeof deleted === "number") return `已清理 ${number(deleted)} 条`;
+  const parts = Object.entries(deleted)
+    .filter(([, count]) => count > 0)
+    .map(
+      ([kind, count]) => `${cleanupNames[kind] ?? kind} ${number(count)} 条`
+    );
+  return parts.length ? parts.join(" · ") : "本轮没有到期记录";
+});
 const form = reactive<RetentionConfig>({
   enabled: true,
   logs_days: 30,
@@ -51,7 +76,7 @@ const fields = [
   {
     key: "logs_days",
     label: "本地请求日志",
-    hint: "监控明细；不影响上游实时日志"
+    hint: "按日志产生时间计算，到期分批删除；不影响上游实时日志"
   },
   {
     key: "history_days",
@@ -224,6 +249,14 @@ async function save(): Promise<void> {
         @changed="remote.refresh"
       />
     </div>
+    <p v-if="cleanupSummary" class="section-footnote">{{ cleanupSummary }}</p>
+    <el-tag
+      v-if="remote.data.value?.last_run?.backlog"
+      type="info"
+      effect="plain"
+    >
+      积压记录将在一分钟后继续清理
+    </el-tag>
     <p class="section-footnote">
       最近清理：{{
         timeCN(
