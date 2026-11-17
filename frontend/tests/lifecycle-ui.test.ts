@@ -37,7 +37,7 @@ it("上游账户分列显示今日和累计消费，未读取不伪造为零", a
           start_at: 10,
           end_at: 20,
           timezone: "Asia/Shanghai",
-          stale: false
+          stale: true
         }
       }
     ],
@@ -48,6 +48,10 @@ it("上游账户分列显示今日和累计消费，未读取不伪造为零", a
   expect(view.text()).toContain("今日已用");
   expect(view.text()).toContain("¥12.50");
   expect(view.text()).toContain("累计已用");
+  expect(view.text()).toContain("截至");
+  expect(view.text()).not.toContain("Asia/Shanghai");
+  expect(view.text()).not.toContain("零点至查询时");
+  expect(view.text()).not.toContain("缓存已过期");
   view.unmount();
 });
 it("数据管理明确只清理本地数据，预览不会触发删除", async () => {
@@ -132,5 +136,39 @@ it("上游列表支持原生列设置，隐藏列不改动后端账户", async (
       .mocked(request)
       .mock.calls.every(([, method]) => !method || method === "GET")
   ).toBe(true);
+  view.unmount();
+});
+
+it("数据管理显示各类最近清理数量及后台续清理状态", async () => {
+  vi.mocked(request).mockResolvedValue({
+    config: {
+      enabled: true,
+      confirmed: true,
+      logs_days: 7,
+      history_days: 30,
+      tasks_days: 1,
+      audits_days: 30
+    },
+    counts: {},
+    next_check_at: 2000000000,
+    last_run: {
+      finished_at: 1999990000,
+      automatic: true,
+      enabled: true,
+      deleted: {
+        logs: 9,
+        notifications: 2,
+        tasks: 3,
+        audits: 4,
+        operations: 500
+      },
+      backlog: true
+    }
+  });
+  const view = mount(DataManagement, { global: { plugins: [ElementPlus] } });
+  await flushPromises();
+  expect(view.text()).toContain("本地日志 9 条");
+  expect(view.text()).toContain("操作记录 500 条");
+  expect(view.text()).toContain("积压记录将在一分钟后继续清理");
   view.unmount();
 });

@@ -82,8 +82,8 @@ class Fleet:
             )
             runtime = Runtime(settings)
 
-            async def prune_operation_records() -> None:
-                await self.control.prune_operations(
+            async def prune_operation_records() -> int:
+                return await self.control.prune_operations(
                     platform_id, time.time() - config.retention.audits_days * 86400
                 )
 

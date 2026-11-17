@@ -1,32 +1,59 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
-import type { LogRecord, Page } from "@/api/types";
+import type { LogRecord, LogRetention, Page } from "@/api/types";
 import { number, quotaText, timeCN } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 const store = usePlatformStore(),
   page = ref(1),
   size = ref(20),
+  source = ref<"live" | "local">("live"),
   period = ref("今天"),
   type = ref(0),
   httpStatus = ref<number | undefined>(),
   cursor = ref(""),
   selected = ref<LogRecord | null>(null),
   drawer = ref(false);
-watch([() => store.currentId, period, type, httpStatus, size], () => {
+watch([() => store.currentId, source, period, type, httpStatus, size], () => {
   page.value = 1;
   cursor.value = "";
+  drawer.value = false;
+  selected.value = null;
 });
 const { data, loading, error, refresh, total } = usePagedRemote<
-  Page<LogRecord> & { cursor?: string; has_more?: boolean; limitation?: string }
+  Page<LogRecord> & {
+    cursor?: string;
+    has_more?: boolean;
+    limitation?: string;
+    retention?: LogRetention;
+  }
 >(
   () =>
     store.currentId
-      ? `/platforms/${store.currentId}/logs?period=${encodeURIComponent(period.value)}&page=${page.value}&page_size=${size.value}&log_type=${type.value}&http_status=${httpStatus.value ?? 0}&cursor=${cursor.value}`
+      ? `/platforms/${store.currentId}/logs?live=${source.value === "live"}&period=${encodeURIComponent(period.value)}&page=${page.value}&page_size=${size.value}&log_type=${type.value}&http_status=${httpStatus.value ?? 0}&cursor=${cursor.value}`
       : "",
-  () => store.currentId
+  () => `${store.currentId}:${source.value}`
 );
+const sourceOptions = [
+  { label: "上游实时", value: "live" },
+  { label: "本地记录", value: "local" }
+];
+const cursorMode = computed(
+  () => source.value === "live" && !!httpStatus.value
+);
+const sourceHint = computed(() =>
+  source.value === "live"
+    ? "直接读取绑定平台，不复制全量日志；本地清理不会删除上游记录。"
+    : "仅显示本服务已保存的历史日志；按保留策略定时删除，不自动复制上游日志。"
+);
+const retentionLabel = computed(() => {
+  const policy = data.value?.retention;
+  if (!policy) return "";
+  return policy.enabled
+    ? `本地日志保留 ${policy.logs_days} 天`
+    : "本地自动清理已关闭";
+});
 const columns = [
   {
     label: "时间",
@@ -57,18 +84,28 @@ const columns = [
 ];
 </script>
 <template>
-  <ConsolePage
-    title="请求日志"
-    description="向绑定平台按页查询；HTTP状态码采用有界错误日志扫描，可继续读取，不伪造全量总数"
-    @refresh="refresh"
+  <ConsolePage title="请求日志" :description="sourceHint" @refresh="refresh"
     ><template #actions
       ><el-button @click="$router.push('/console/settings?tab=data')"
-        >本地数据保留</el-button
+        >定时清理设置</el-button
       ><el-button :loading="loading" @click="refresh"
         >重新查询</el-button
       ></template
     >
     <section class="surface">
+      <div class="table-toolbar">
+        <el-segmented
+          v-model="source"
+          :options="sourceOptions"
+          aria-label="日志来源"
+        />
+        <el-tooltip
+          v-if="retentionLabel"
+          content="仅清理本服务本地数据；每小时检查，保留天数在定时清理设置中修改。"
+        >
+          <el-tag type="info" effect="plain">{{ retentionLabel }}</el-tag>
+        </el-tooltip>
+      </div>
       <div class="table-toolbar">
         <el-select v-model="period" style="width: 125px" aria-label="日志周期"
           ><el-option
@@ -88,9 +125,9 @@ const columns = [
           aria-label="HTTP状态码"
           :controls="false"
         /><span class="toolbar-meta">{{
-          httpStatus
+          cursorMode
             ? `本批 ${number(data?.items.length)} 条匹配 · 总数未统计`
-            : `${number(data?.total)} 条 · 平台管理 API`
+            : `${number(data?.total)} 条 · ${source === "live" ? "平台管理 API" : "本地记录"}`
         }}</span>
       </div>
       <el-alert
@@ -98,7 +135,11 @@ const columns = [
         :title="error"
         type="error"
         :closable="false"
-        description="未取到数据不代表平台没有请求"
+        :description="
+          source === 'live'
+            ? '未取到数据不代表平台没有请求'
+            : '本地记录不代表上游全量请求'
+        "
       /><pure-table
         :data="data?.items ?? []"
         :columns="columns"
@@ -121,7 +162,7 @@ const columns = [
           ></template
         ></pure-table
       >
-      <div v-if="httpStatus" class="table-toolbar">
+      <div v-if="cursorMode" class="table-toolbar">
         <span>{{ data?.limitation }}</span
         ><el-button
           :disabled="!data?.has_more || loading"

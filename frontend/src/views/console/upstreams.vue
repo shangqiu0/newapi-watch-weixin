@@ -226,14 +226,6 @@ const displayedColumns = computed(() =>
             row.usage?.quota_display ??
             (row.usage?.status === "error" ? "读取失败" : "尚未读取")
           }}</strong>
-          <div class="muted">
-            {{
-              row.usage?.timezone ||
-              row.usage_timezone ||
-              platform.current?.timezone
-            }}
-            · 零点至查询时
-          </div>
           <div v-if="row.usage?.end_at" class="section-footnote">
             截至 {{ timeCN(row.usage.end_at, row.usage.timezone) }}
           </div>
@@ -241,9 +233,6 @@ const displayedColumns = computed(() =>
             ><el-tag type="warning" size="small" effect="plain">{{
               row.usage.quota_display ? "旧值 · 统计读取失败" : "统计暂不可用"
             }}</el-tag></el-tooltip
-          >
-          <span v-else-if="row.usage?.stale" class="section-footnote"
-            >缓存已过期，待刷新</span
           >
         </template>
         <template #status="{ row }"

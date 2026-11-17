@@ -397,9 +397,10 @@ class ControlStore:
             )
         return {"items": items, "total": count["n"] if count else 0, **paging.model_dump()}
 
-    async def prune_operations(self, platform_id: str, before: float) -> None:
+    async def prune_operations(self, platform_id: str, before: float) -> int:
         async with self.transaction() as db:
-            await db.execute(
+            deleted = await db.execute(
                 "DELETE FROM operation_records WHERE id IN (SELECT id FROM operation_records WHERE platform_id=? AND created_at<? ORDER BY created_at LIMIT 500)",
                 (platform_id, before),
             )
+        return max(0, deleted.rowcount)
