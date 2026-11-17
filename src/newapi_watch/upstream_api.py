@@ -107,7 +107,13 @@ def upstream_routes(control: ControlStore, fleet: Fleet) -> APIRouter:
         if not entry.enabled:
             raise ControlError(409, "当前平台已停用")
         try:
-            return wrap(await entry.runtime.upstream.query(account_id))
+            service = entry.runtime.upstream
+            result = await service.query(account_id)
+            account = service.account(account_id)
+            result["usage"] = await service.usage.query(
+                account, service.clients[account_id], service.scope(account)
+            )
+            return wrap(result)
         except ValueError as error:
             raise ControlError(502, str(error)) from None
 

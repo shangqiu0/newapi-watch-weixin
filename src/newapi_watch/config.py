@@ -9,6 +9,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .money import CurrencyConfig
+from .retention import RetentionConfig
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     log_seconds: float = Field(default=120, ge=1)
     log_initial_hours: int = Field(default=24, ge=1, le=168)
     log_overlap_seconds: int = Field(default=120, ge=1)
+    retention: RetentionConfig | None = None
     retention_days: int = Field(default=30, ge=2, le=365)
     probe_enabled: bool = False
     probe_seconds: float = Field(default=600, ge=30)

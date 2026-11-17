@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import HistoryActions from "@/components/Console/HistoryActions.vue";
+import { usePageBounds } from "@/composables/usePageBounds";
 import { ref, watch } from "vue";
 import { usePlatformStore } from "@/store/modules/platform";
 import { usePagedRemote } from "@/composables/usePagedRemote";
@@ -46,9 +48,21 @@ const statuses: Record<string, string> = {
   pending: "等待投递",
   sending: "投递中",
   historical: "历史停发（待确认）",
-  dead: "投递失败"
+  dead: "投递失败",
+  cancelled: "已取消（未投递）"
 };
+const selectedRows = ref<Delivery[]>([]);
+watch([() => platform.currentId, page, size], () => {
+  selectedRows.value = [];
+});
+usePageBounds(remote.total, page, size);
 const columns = [
+  {
+    type: "selection",
+    width: 44,
+    selectable: (row: Delivery) =>
+      ["sent", "historical", "cancelled", "dead"].includes(row.status)
+  },
   {
     label: "通知",
     minWidth: 140,
@@ -61,7 +75,7 @@ const columns = [
     minWidth: 200,
     formatter: (r: Delivery) => timeCN(r.created_at, platform.current?.timezone)
   },
-  { label: "操作", slot: "action", width: 100, fixed: "right" }
+  { label: "操作", slot: "action", width: 250, fixed: "right" }
 ];
 async function retry(item: Delivery): Promise<void> {
   retrying.value = item.id;
@@ -74,6 +88,15 @@ async function retry(item: Delivery): Promise<void> {
     await remote.refresh();
   }, "已重新排队；成功投递的目标不会重复发送");
   retrying.value = null;
+}
+async function cancel(item: Delivery): Promise<void> {
+  const id = platform.currentId;
+  await perform(async () => {
+    await request(`/platforms/${id}/notification-cancellations`, "POST", {
+      ids: [item.id]
+    });
+    if (id === platform.currentId) await remote.refresh();
+  }, "已取消通知，未标记为已投递");
 }
 </script>
 <template>
@@ -88,11 +111,24 @@ async function retry(item: Delivery): Promise<void> {
       :closable="false"
     />
     <section class="surface">
+      <div class="table-toolbar">
+        <span class="toolbar-meta"
+          >已选择 {{ selectedRows.length }} 条 · 发送中的通知受保护</span
+        ><HistoryActions
+          kind="notifications"
+          :ids="selectedRows.map(r => String(r.id))"
+          @changed="
+            selectedRows = [];
+            remote.refresh();
+          "
+        />
+      </div>
       <pure-table
         :data="remote.data.value?.items ?? []"
         :columns="columns"
         :loading="remote.loading.value"
         row-key="id"
+        @selection-change="rows => (selectedRows = rows)"
         ><template #status="{ row }"
           ><StatusDot
             :text="
@@ -126,8 +162,22 @@ async function retry(item: Delivery): Promise<void> {
                 >重试</el-button
               ></template
             ></el-popconfirm
-          ><span v-else class="muted">—</span></template
-        ></pure-table
+          ><el-popconfirm
+            v-if="row.status === 'pending'"
+            title="取消此通知？不会将其标为已投递"
+            @confirm="cancel(row)"
+            ><template #reference
+              ><el-button link type="warning">取消投递</el-button></template
+            ></el-popconfirm
+          >
+          <HistoryActions
+            v-if="
+              ['sent', 'historical', 'cancelled', 'dead'].includes(row.status)
+            "
+            kind="notifications"
+            :ids="[String(row.id)]"
+            label="删除"
+            @changed="remote.refresh" /></template></pure-table
       ><el-pagination
         v-model:current-page="page"
         v-model:page-size="size"

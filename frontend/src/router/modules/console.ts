@@ -3,7 +3,7 @@ import Server from "~icons/lucide/server";
 import Logs from "~icons/lucide/scroll-text";
 import Bell from "~icons/lucide/bell";
 import Bot from "~icons/lucide/bot";
-import Model from "~icons/lucide/plug";
+import Settings from "~icons/lucide/settings-2";
 import Chat from "~icons/lucide/messages-square";
 import Users from "~icons/lucide/users";
 import Wallet from "~icons/lucide/wallet";
@@ -23,22 +23,75 @@ export default {
   meta: { title: "监控工作台", icon: Overview, rank: 0 },
   children: [
     page("overview", "Overview", "监控工作台", Overview),
-    page("platforms", "Platforms", "平台管理", Server),
-    page("policies", "Policies", "监控策略", Policies),
-    page("channels", "Channels", "渠道状态", Server),
-    page("logs", "Logs", "请求日志", Logs),
-    page("users", "Users", "用户额度", Users),
-    page("tasks", "QueryTasks", "查询任务", Policies),
-    page("statistics", "Statistics", "按需统计", Reports),
-    page("alerts", "Alerts", "告警记录", Bell),
-    page("notifications", "Notifications", "通知投递", Bell),
-    page("balances", "Balances", "余额监控", Wallet),
-    page("upstreams", "Upstreams", "上游账户", Wallet),
-    page("currency", "Currency", "金额显示", Wallet),
-    page("reports", "Reports", "报告调度", Reports),
-    page("bindings", "Bindings", "机器人与通知", Bot),
-    page("model", "Model", "模型服务", Model),
-    page("chat", "Chat", "问答工作区", Chat),
-    page("audit", "Audit", "操作审计", Logs)
+    {
+      path: "/monitoring",
+      name: "Monitoring",
+      redirect: "/console/policies",
+      meta: { title: "监控管理", icon: Policies },
+      children: [
+        page("policies", "Policies", "监控策略", Policies),
+        page("balances", "Balances", "用户余额监控", Wallet),
+        page("upstreams", "Upstreams", "上游账户", Wallet)
+      ]
+    },
+    {
+      path: "/data",
+      name: "DataQueries",
+      redirect: "/console/channels",
+      meta: { title: "数据查询", icon: Logs },
+      children: [
+        page("channels", "Channels", "渠道状态", Server),
+        page("users", "Users", "用户额度", Users),
+        page("logs", "Logs", "请求日志", Logs),
+        page("statistics", "Statistics", "按需统计", Reports),
+        page("chat", "Chat", "问答工作区", Chat)
+      ]
+    },
+    {
+      path: "/alerts",
+      name: "AlertCenter",
+      redirect: "/console/alerts",
+      meta: { title: "告警中心", icon: Bell },
+      children: [
+        page("alerts", "Alerts", "告警记录", Bell),
+        page("notifications", "Notifications", "通知投递", Bell),
+        page("reports", "Reports", "报告调度", Reports)
+      ]
+    },
+    {
+      path: "/configuration",
+      name: "Configuration",
+      redirect: "/console/settings",
+      meta: { title: "配置管理", icon: Settings },
+      children: [
+        page("platforms", "Platforms", "平台管理", Server),
+        page("settings", "PlatformSettings", "平台设置", Settings),
+        page("bindings", "Bindings", "机器人与通知", Bot)
+      ]
+    },
+    {
+      path: "/console/tasks",
+      name: "QueryTasks",
+      redirect: { path: "/console/statistics", query: { tab: "tasks" } },
+      meta: { showLink: false }
+    },
+    {
+      path: "/console/currency",
+      name: "Currency",
+      redirect: { path: "/console/settings", query: { tab: "currency" } },
+      meta: { showLink: false }
+    },
+    {
+      path: "/console/model",
+      name: "Model",
+      redirect: { path: "/console/settings", query: { tab: "model" } },
+      meta: { showLink: false }
+    },
+    {
+      path: "/console/audit",
+      name: "Audit",
+      redirect: { path: "/console/settings", query: { tab: "records" } },
+      meta: { showLink: false }
+    }
   ]
 };

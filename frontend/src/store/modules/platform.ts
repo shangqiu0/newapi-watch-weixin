@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import { request } from "@/api/console";
 import type { Overview, Platform } from "@/api/types";
 import { store } from "@/store";
+import { canChangePlatform } from "@/utils/platformGuard";
 export const usePlatformStore = defineStore("console-platform", {
   state: () => ({
     list: [] as Platform[],
@@ -15,6 +16,7 @@ export const usePlatformStore = defineStore("console-platform", {
     loading: false,
     error: "",
     generation: 0,
+    selectionGeneration: 0,
     listGeneration: 0,
     controller: null as AbortController | null,
     updated: 0
@@ -41,6 +43,9 @@ export const usePlatformStore = defineStore("console-platform", {
       if (this.currentId === id) await this.select(this.list[0]?.id ?? "");
     },
     async select(id: string) {
+      const selection = ++this.selectionGeneration;
+      if (id !== this.currentId && !(await canChangePlatform())) return;
+      if (selection !== this.selectionGeneration) return;
       this.currentId = id;
       this.overview = null;
       await this.refresh();
@@ -75,6 +80,7 @@ export const usePlatformStore = defineStore("console-platform", {
       }
     },
     clear() {
+      this.selectionGeneration++;
       this.generation++;
       this.listGeneration++;
       this.controller?.abort();

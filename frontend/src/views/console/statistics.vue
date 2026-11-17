@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { useRouter } from "vue-router";
+import QueryTasksPanel from "@/components/Console/QueryTasksPanel.vue";
+import { useRoute } from "vue-router";
 import { usePlatformStore } from "@/store/modules/platform";
 import { useRemote } from "@/composables/useRemote";
 import type { Statistics, PendingStatistics, Rank } from "@/api/types";
@@ -8,13 +9,14 @@ import { number, quotaText } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import TrendChart from "@/components/Console/TrendChart.vue";
 const platform = usePlatformStore(),
-  router = useRouter(),
+  route = useRoute(),
+  active = ref(route?.query?.tab === "tasks" ? "tasks" : "statistics"),
   period = ref("今天"),
   dimension = ref("model"),
   exact = ref(false);
 const remote = useRemote<Statistics | PendingStatistics>(
   () =>
-    platform.currentId
+    platform.currentId && active.value === "statistics"
       ? `/platforms/${platform.currentId}/statistics-queries?period=${encodeURIComponent(period.value)}&dimension=${dimension.value}&exact=${exact.value}`
       : "",
   "POST"
@@ -67,51 +69,59 @@ const columns = [
         >查询统计</el-button
       ></template
     >
-    <el-alert
-      v-if="remote.error.value"
-      :title="remote.error.value"
-      type="error"
-      description="未取得数据不代表零用量；检查权限或改用精确统计任务"
-      :closable="false"
-    />
-    <section v-if="pending" class="surface">
-      <div class="section-heading"><h2>查询任务已受理</h2></div>
-      <p class="mono">{{ pending.task.id }}</p>
-      <p>{{ pending.limitation }}</p>
-      <el-button type="primary" @click="router.push('/console/tasks')"
-        >查看查询任务</el-button
-      >
-    </section>
-    <section v-else class="surface">
-      <div class="section-heading">
-        <div>
-          <h2>用量趋势</h2>
-          <p>
-            {{ period }} ·
-            {{
-              snapshot?.source === "newapi_hourly_aggregate"
-                ? "上游已落盘汇总，非实时完整日志"
-                : "金额按当前平台的人民币显示设置；未确认换算时保留原始 quota"
-            }}
-          </p>
-        </div>
-      </div>
-      <el-skeleton v-if="remote.loading.value" :rows="7" /><TrendChart
-        v-else-if="snapshot?.series.length"
-        :data="snapshot"
-      /><el-empty
-        v-else
-        :description="
-          snapshot
-            ? '此接口未提供时间轴或没有可确认的趋势点'
-            : '尚无成功查询结果'
-        "
+    <el-tabs v-model="active" class="workspace-tabs"
+      ><el-tab-pane label="用量统计" name="statistics" /><el-tab-pane
+        label="后台查询任务"
+        name="tasks"
+    /></el-tabs>
+    <QueryTasksPanel v-if="active === 'tasks'" />
+    <template v-else>
+      <el-alert
+        v-if="remote.error.value"
+        :title="remote.error.value"
+        type="error"
+        description="未取得数据不代表零用量；检查权限或改用精确统计任务"
+        :closable="false"
       />
-    </section>
-    <section v-if="snapshot" class="surface">
-      <div class="section-heading"><h2>消耗排行</h2></div>
-      <pure-table :columns="columns" :data="snapshot.ranking" row-key="key" />
-      <p class="section-footnote">{{ snapshot.limitation }}</p>
-    </section>
+      <section v-if="pending" class="surface">
+        <div class="section-heading"><h2>查询任务已受理</h2></div>
+        <p class="mono">{{ pending.task.id }}</p>
+        <p>{{ pending.limitation }}</p>
+        <el-button type="primary" @click="active = 'tasks'"
+          >查看查询任务</el-button
+        >
+      </section>
+      <section v-else class="surface">
+        <div class="section-heading">
+          <div>
+            <h2>用量趋势</h2>
+            <p>
+              {{ period }} ·
+              {{
+                snapshot?.source === "newapi_hourly_aggregate"
+                  ? "上游已落盘汇总，非实时完整日志"
+                  : "金额按当前平台的人民币显示设置；未确认换算时保留原始 quota"
+              }}
+            </p>
+          </div>
+        </div>
+        <el-skeleton v-if="remote.loading.value" :rows="7" /><TrendChart
+          v-else-if="snapshot?.series.length"
+          :data="snapshot"
+        /><el-empty
+          v-else
+          :description="
+            snapshot
+              ? '此接口未提供时间轴或没有可确认的趋势点'
+              : '尚无成功查询结果'
+          "
+        />
+      </section>
+      <section v-if="snapshot" class="surface">
+        <div class="section-heading"><h2>消耗排行</h2></div>
+        <pure-table :columns="columns" :data="snapshot.ranking" row-key="key" />
+        <p class="section-footnote">{{ snapshot.limitation }}</p>
+      </section>
+    </template>
   </ConsolePage>
 </template>

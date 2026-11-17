@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 
 from .money import CurrencyConfig
 from .monitoring.models import EventKind, MonitoringConfig
+from .retention import RetentionConfig
 from .upstream_accounts import UpstreamAccount
 
 
@@ -54,6 +55,7 @@ class PlatformInput(Input):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
     upstream_accounts: list[UpstreamAccount] = Field(default_factory=list, max_length=30)
 
     @field_validator("newapi_url")
@@ -93,6 +95,7 @@ class PlatformPatch(Input):
     llm: LLMConfig | None = None
     monitoring: MonitoringConfig | None = None
     currency: CurrencyConfig | None = None
+    retention: RetentionConfig | None = None
     upstream_accounts: list[UpstreamAccount] | None = Field(default=None, max_length=30)
 
 

@@ -29,6 +29,7 @@ from .plugins import Registry
 from .query_engine.engine import QueryEngine
 from .query_engine.error_search import ErrorSearch
 from .reports import Reports
+from .retention import RetentionConfig, RetentionService
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class Runtime:
         self.tasks: list[asyncio.Task[Any]] = []
         self.stop = asyncio.Event()
         self.policies: MonitoringService | None = None
+        self.retention_callback: Callable[[], Awaitable[None]] | None = None
         self.upstream: Any = None
         self.commands.upstream = None
 
@@ -135,13 +137,13 @@ class Runtime:
             ("notifications", 1, self.notifications.process_one),
             ("events", 1, self.reconcile_event),
             ("report", 30, self.daily),
-            ("retention", 3600, self.prune),
+            ("retention", 60, self.prune),
         ]
         if self.policies is not None:
             jobs = [
                 ("policy-checks", 1, self.policies.schedule),
                 ("notifications", 1, self.notifications.process_one),
-                ("retention", 3600, self.prune),
+                ("retention", 60, self.prune),
             ]
         if self.policies is not None:
             jobs.append(("interactive-queries", 1, self.query_engine.jobs.tick))
@@ -204,10 +206,25 @@ class Runtime:
         await self.store.queue_report(day.isoformat(), report.text, report.image, now.timestamp())
 
     async def prune(self) -> None:
-        before = time.time() - self.settings.retention_days * 86400
-        await self.store.prune(before)
-        await self.commands.audits.prune(before)
-        await self.query_engine.jobs.prune()
+        now = time.time()
+        next_at = await self.store.get_meta("retention:next_at")
+        if not next_at:
+            await self.store.set_meta("retention:next_at", str(now + 3600))
+            return
+        if now < float(next_at):
+            return
+        config = self.settings.retention or RetentionConfig(
+            logs_days=self.settings.retention_days,
+            history_days=self.settings.retention_days,
+            audits_days=self.settings.retention_days,
+        )
+        async with self.query_engine.jobs.lock:
+            result = await RetentionService(self.store).prune(config)
+        if config.enabled and self.retention_callback:
+            await self.retention_callback()
+        await self.store.set_meta(
+            "retention:next_at", str(time.time() + (60 if result["backlog"] else 3600))
+        )
 
     async def close(self) -> None:
         self.stop.set()

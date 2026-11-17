@@ -88,7 +88,7 @@ async def test_multiple_webhooks_partial_failure_does_not_repeat_success(control
     assert seen.count("one") == 1 and seen.count("two") == 2
 
 
-async def test_platform_disabled_does_not_start_background_or_bot_tasks(control):
+async def test_platform_disabled_starts_only_local_retention_not_monitoring_or_bots(control):
     p = await control.create_platform(
         PlatformInput(
             name="A",
@@ -101,7 +101,7 @@ async def test_platform_disabled_does_not_start_background_or_bot_tasks(control)
     fleet = Fleet(control, demo=True)
     await fleet.open()
     try:
-        assert not fleet.entries[p["id"]].runtime.tasks
+        assert [task.get_name() for task in fleet.entries[p["id"]].runtime.tasks] == ["retention"]
         assert not fleet.entries[p["id"]].bots
     finally:
         await fleet.close()
