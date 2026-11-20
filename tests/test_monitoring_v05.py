@@ -168,6 +168,7 @@ async def test_webhook_subscription_and_actual_all_mention_do_not_cross_platform
             await target.send_for(1, "渠道异常告警", kind="request_error", mention_all=True)
         assert len(sent) == 1 and sent[0][0] == "a-errors"
         assert sent[0][1]["msgtype"] == "text" and sent[0][1]["text"]["mentioned_list"] == ["@all"]
+        assert sent[0][1]["text"]["content"] == "平台：A    类型：渠道异常告警"
     finally:
         await control.close()
 

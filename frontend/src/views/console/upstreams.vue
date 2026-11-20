@@ -147,6 +147,7 @@ const columns = [
   { label: "上游账户", slot: "account", minWidth: 190 },
   { label: "可用余额（¥）", slot: "balance", minWidth: 160, align: "right" },
   { label: "今日已用（¥）", slot: "usage", minWidth: 220, align: "right" },
+  { label: "提醒阈值（¥）", slot: "threshold", minWidth: 145, align: "right" },
   { label: "接入 / 监控", slot: "status", minWidth: 120 },
   { label: "最近读取", slot: "time", minWidth: 200 },
   { label: "操作", slot: "action", fixed: "right", width: 200 }
@@ -234,6 +235,11 @@ const displayedColumns = computed(() =>
               row.usage.quota_display ? "旧值 · 统计读取失败" : "统计暂不可用"
             }}</el-tag></el-tooltip
           >
+        </template>
+        <template #threshold="{ row }">
+          {{
+            row.monitor_enabled ? (row.threshold_display ?? "未提供") : "未启用"
+          }}
         </template>
         <template #status="{ row }"
           ><el-tag :type="row.enabled ? 'success' : 'info'">{{

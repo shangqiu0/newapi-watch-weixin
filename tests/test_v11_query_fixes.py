@@ -13,6 +13,7 @@ from newapi_watch.control_models import LLMConfig
 from newapi_watch.llm_tools import Tools
 from newapi_watch.model_provider import Provider
 from newapi_watch.models import Channel
+from newapi_watch.money import CurrencyConfig
 from newapi_watch.runtime import Runtime
 
 
@@ -370,3 +371,64 @@ async def test_auth_failure_fallback_redacts_model_key_embedded_in_upstream_name
         assert "private-model-key" not in reply.text and "[REDACTED]" in reply.text
     finally:
         await runtime.close()
+
+
+@pytest.mark.parametrize("quota, amount", [(1234567, "¥18.02"), (0, "¥0.00"), (None, None)])
+async def test_channel_today_usage_reads_scoped_consumption_and_never_invents_zero(
+    tmp_path, quota, amount
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    paths = []
+
+    def upstream(request):
+        paths.append(request.url.path)
+        assert request.url.host == "demo.invalid"
+        if request.url.path == "/api/channel/99":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {"id": 99, "name": "样例渠道", "status": 1, "used_quota": 99999999},
+                },
+            )
+        assert request.url.path == "/api/log/stat"
+        params = request.url.params
+        assert params["channel"] == "99" and params["type"] == "2"
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        assert int(params["start_timestamp"]) == int(
+            now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        )
+        assert abs(int(params["end_timestamp"]) - int(now.timestamp())) < 5
+        return httpx.Response(
+            200, json={"success": True, "data": {"quota": quota, "rpm": 13, "tpm": 50}}
+        )
+
+    config = settings(tmp_path)
+    config.currency = CurrencyConfig(
+        confirmed=True, quota_per_unit="500000", usd_exchange_rate="7.3"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as http:
+        runtime = Runtime(config, http=http)
+        await runtime.open(start_tasks=False)
+        try:
+            result = await Tools(runtime.commands).call(
+                "get_channel_today_usage", '{"channel_id":99}'
+            )
+            reply = await runtime.assistant.execute("99号渠道今天用了多少？", source="wecom")
+            assert result["ok"] is (amount is not None)
+            assert reply.ok is (amount is not None)
+            if amount is not None:
+                assert result["quota_display"] == amount
+                assert result["quota"] == quota and result["channel_id"] == 99
+                assert "今日" in reply.text and "样例渠道" in reply.text and amount in reply.text
+            else:
+                assert "¥0.00" not in reply.text
+            invalid = await Tools(runtime.commands).call(
+                "get_channel_today_usage", '{"channel_id":0}'
+            )
+            assert invalid["ok"] is False
+        finally:
+            await runtime.close()
+    assert paths == ["/api/channel/99", "/api/log/stat"] * 2

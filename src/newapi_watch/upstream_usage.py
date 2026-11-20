@@ -51,14 +51,16 @@ class UpstreamUsage:
         scope: str,
         *,
         now: float | None = None,
+        fresh: bool = False,
     ) -> dict[str, Any]:
-        now = time.time() if now is None else now
-        start, timezone = self.window(account, now)
-        key = f"{scope}:{timezone}:{start}"
         async with self.locks.setdefault(scope, asyncio.Lock()):
-            cached = await self.cache.get(key)
-            if cached and 0 <= now - cached["queried_at"] < 300:
-                return cached
+            now = time.time() if now is None else now
+            start, timezone = self.window(account, now)
+            key = f"{scope}:{timezone}:{start}"
+            if not fresh:
+                cached = await self.cache.get(key)
+                if cached and 0 <= now - cached["queried_at"] < 300:
+                    return cached
             result: dict[str, Any] = {
                 "source": "newapi_log_self_stat",
                 "start_at": start,

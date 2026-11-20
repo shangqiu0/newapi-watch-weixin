@@ -183,6 +183,22 @@ class DataQueries:
             "timezone": self.settings.timezone,
         }
 
+    async def channel_today_usage(self, channel_id: int) -> dict[str, Any]:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        channel = await self.client.channel(channel_id)
+        today = datetime.now(ZoneInfo(self.settings.timezone)).date()
+        usage = await self.usage_summary(
+            StatisticsQuery(start=today, end=today, channel_id=channel.id)
+        )
+        return {
+            **usage,
+            "channel_id": channel.id,
+            "channel_name": channel.name,
+            "date": today.isoformat(),
+        }
+
     async def usage_summary(self, query: StatisticsQuery) -> dict[str, Any]:
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -190,7 +206,7 @@ class DataQueries:
         query.reject_future(datetime.now(ZoneInfo(self.settings.timezone)).date())
         start, end = query.window(self.settings.timezone)
         through = min(end, int(time.time()) + 1)
-        result = await self.client.usage_counters(start, through)
+        result = await self.client.usage_counters(start, through, channel_id=query.channel_id)
         return {
             "source": "newapi_admin_api_aggregate",
             "quota": result.quota,

@@ -130,15 +130,11 @@ class NewAPIClient:
         except (ValidationError, ValueError):
             raise UpstreamError("NewAPI 单渠道信息不兼容或ID不匹配") from None
 
-    async def usage_counters(self, start: int, end: int) -> UsageCounters:
-        payload = await self.request(
-            "/api/log/stat",
-            {
-                "start_timestamp": start,
-                "end_timestamp": end - 1,
-                "type": 2,
-            },
-        )
+    async def usage_counters(self, start: int, end: int, *, channel_id: int = 0) -> UsageCounters:
+        params = {"start_timestamp": start, "end_timestamp": end - 1, "type": 2}
+        if channel_id:
+            params["channel"] = channel_id
+        payload = await self.request("/api/log/stat", params)
         try:
             return UsageCounters.model_validate(payload.get("data"))
         except ValidationError:

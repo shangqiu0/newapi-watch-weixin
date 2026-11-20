@@ -6,7 +6,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ERROR_TEMPLATE = """渠道异常告警
+ERROR_TITLE = "渠道异常告警"
+LEGACY_ERROR_TEMPLATE = """渠道异常告警
 错误日志时间：{log_time}
 日志 ID：{log_id}
 上游请求 ID：{upstream_request_id}
@@ -15,6 +16,15 @@ ERROR_TEMPLATE = """渠道异常告警
 模型：{model}
 错误信息：{error_message}
 上轮冷却窗口内同类错误累计：{count} 次"""
+ERROR_TEMPLATE = f"""{ERROR_TITLE}
+渠道：{{channel_name}}（#{{channel_id}}）
+状态码：{{status_code}}
+模型：{{model}}
+错误信息：{{error_message}}
+错误日志时间：{{log_time}}
+上游请求 ID：{{upstream_request_id}}
+平台请求 ID：{{request_id}}
+上轮冷却窗口内同类错误累计：{{count}} 次"""
 PLACEHOLDERS = {
     "channel_name",
     "channel_id",
@@ -85,14 +95,16 @@ class ErrorRule(Policy):
     @field_validator("template")
     @classmethod
     def template_fields(cls, value: str) -> str:
+        if "\n".join(value.strip().splitlines()) == LEGACY_ERROR_TEMPLATE:
+            return ERROR_TEMPLATE
         for _, name, spec, conversion in Formatter().parse(value):
             if name is not None and (name not in PLACEHOLDERS or spec or conversion):
                 raise ValueError("模板包含不支持的占位符/格式")
         lines = []
         for line in value.splitlines():
             names = {name for _, name, _, _ in Formatter().parse(line)}
-            if names & {"error_code", "time"} or re.match(
-                r"^\s*(?:[-*]\s*)?(?:错误码|告警时间|时间)\s*[:：]", line
+            if names & {"error_code", "time", "log_id"} or re.match(
+                r"^\s*(?:[-*]\s*)?(?:错误码|告警时间|时间|日志\s*ID)\s*[:：]", line, re.IGNORECASE
             ):
                 continue
             if "log_time" in names:

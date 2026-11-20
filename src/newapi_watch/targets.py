@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from .control_store import ControlStore
+from .monitoring.models import ERROR_TITLE
 from .notifications import GroupWebhookNotifier
 from .persistence import row
 
@@ -58,6 +59,14 @@ class Targets:
             targets = [t for t in targets if t["id"] in binding_ids]
         if not targets:
             raise RuntimeError("该策略没有启用且订阅此事件的Webhook目标")
+        outgoing = f"平台：{self.name}\n{content}"
+        if kind == "request_error":
+            title, _, body = content.partition("\n")
+            if title != ERROR_TITLE:
+                body = content
+            outgoing = f"平台：{self.name}    类型：{ERROR_TITLE}"
+            if body:
+                outgoing += "\n" + body
         failures = 0
         for target in targets:
             key = hashlib.sha256(
@@ -89,7 +98,7 @@ class Targets:
                         message_format=binding.get("message_format", "markdown"),
                         mention_all=mention_all or binding.get("mention_all", False),
                     )
-                    await notifier.send(f"平台：{self.name}\n{content}")
+                    await notifier.send(outgoing)
                     if image is not None:
                         await notifier.send("", image)
             except (RuntimeError, httpx.HTTPError, ValueError):

@@ -99,6 +99,7 @@ class UpstreamAccount(BaseModel):
     def public(self) -> dict[str, Any]:
         result = self.model_dump(mode="json", exclude={"access_token"})
         result["has_access_token"] = bool(self.access_token.get_secret_value())
+        result["threshold_display"] = f"¥{self.threshold_cny:,.2f}"
         return result
 
 
@@ -198,6 +199,23 @@ class UpstreamAccounts:
                 return result
             except UpstreamError as error:
                 raise ValueError(str(error)) from None
+
+    async def query_today_usage(
+        self, identifier: str, *, binding_id: str = "web", now: float | None = None
+    ) -> dict[str, Any]:
+        account = self.account(identifier, binding_id)
+        client = self.clients[identifier]
+        usage = await self.usage.query(account, client, self.scope(account), now=now, fresh=True)
+        if self.closed:
+            raise ValueError("上游账户配置已变更，请重新查询")
+        if usage["status"] != "ok":
+            reason = redact_text(str(usage["error"]), client.settings)
+            raise ValueError(redact_text(reason, self.runtime.settings))
+        return {
+            **usage,
+            "account_id": account.id,
+            "account_name": redact_text(account.name, client.settings),
+        }
 
     async def snapshot(self, account: UpstreamAccount) -> dict[str, Any]:
         sample = json.loads(

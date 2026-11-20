@@ -7,7 +7,9 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -92,12 +94,46 @@ class Assistant:
                 return self._redact_result(CommandResult(text=text))
             except ValueError:
                 return CommandResult(text="任务不存在或不属于当前机器人会话", ok=False)
+        if match := re.fullmatch(
+            r"(?:查(?:询)?\s*)?(?:渠道\s*#?\s*([1-9]\d{0,18})|([1-9]\d{0,18})\s*号\s*渠道)"
+            r"\s*(?:今天|今日)\s*(?:用量|消耗|用了多少(?:量|额度|钱)?|消耗了多少)[？?。!！]?",
+            text,
+        ):
+            channel_id = int(match[1] or match[2])
+            try:
+                async with asyncio.timeout(12):
+                    usage = await self.commands.data.channel_today_usage(channel_id)
+                amount = self.commands.settings.currency.display(usage["quota"])
+                through = datetime.fromtimestamp(
+                    usage["through_timestamp"], ZoneInfo(usage["timezone"])
+                )
+                return self._redact_result(
+                    CommandResult(
+                        text=f"渠道 #{channel_id} · {usage['channel_name']}：今日已用 {amount}。"
+                        f"\n统计范围：{through:%Y-%m-%d} 00:00:00–{through:%H:%M:%S}（{usage['timezone']}）。"
+                    )
+                )
+            except (UpstreamError, TimeoutError) as exc:
+                reason = str(exc) or "上游查询超时"
+                return self._redact_result(
+                    CommandResult(
+                        text=f"未能查询渠道 #{channel_id} 的今日用量：{reason}。未取得消耗数据，不按零计。",
+                        ok=False,
+                    )
+                )
         if text in {"会话ID", "会话 ID", "当前会话ID"}:
             return CommandResult(
                 text="当前会话 ID：" + conversation_id.split(":", 1)[-1]
                 if source == "wecom" and conversation_id
                 else "请在需要接收告警的企业微信会话中发送“会话ID”。"
             )
+        usage_words = r"(?:今日|今天)\s*(?:已用(?:多少)?|用量|消耗(?:了多少)?|用了多少(?:钱|量)?)"
+        if match := re.fullmatch(
+            rf"(?:查询|查看)?\s*上游(?:账户|账号)?(?:\s*{usage_words}(?:\s+(.+?))?"
+            rf"|\s+(.+?)\s*{usage_words})[？?。!！]?",
+            text,
+        ):
+            return await self._upstream_today_usage((match[1] or match[2] or "").strip())
         if self.commands.upstream is not None and (
             match := re.fullmatch(r"(?:查询|查看)?上游(?:账户)?余额(?:\s+(.*))?", text)
         ):
@@ -198,6 +234,46 @@ class Assistant:
             return self._redact_result(result)
         finally:
             self.active -= 1
+
+    async def _upstream_today_usage(self, keyword: str) -> CommandResult:
+        service = self.commands.upstream
+        accounts = (
+            [
+                account
+                for account in service.visible(self.binding_id)
+                if not keyword or keyword in {account.id, account.name}
+            ]
+            if service is not None
+            else []
+        )
+        if not accounts:
+            return CommandResult(
+                text="当前机器人没有匹配的已启用上游账户，请检查查询机器人绑定或账户名称。",
+                ok=False,
+            )
+        if len(accounts) > 1:
+            return self._redact_result(
+                CommandResult(
+                    text="请指定要查的账户：上游今日已用 账户名称或ID。\n"
+                    + "\n".join(f"{a.name} · {a.id}" for a in accounts[:10])
+                )
+            )
+        try:
+            usage = await service.query_today_usage(accounts[0].id, binding_id=self.binding_id)
+        except ValueError as error:
+            return self._redact_result(
+                CommandResult(
+                    text=f"未能查询上游账户今日用量：{error}。未取得当前数据，不按零计。", ok=False
+                )
+            )
+        timezone = usage["timezone"]
+        end = datetime.fromtimestamp(usage["end_at"], ZoneInfo(timezone))
+        return self._redact_result(
+            CommandResult(
+                text=f"上游账户「{usage['account_name']}」今日已用：{usage['quota_display']}。"
+                f"\n统计范围：当天零点起，截至 {end.year}年{end.month}月{end.day}日 {end:%H:%M:%S}（{timezone}）。"
+            )
+        )
 
     def _redact_result(self, result: CommandResult) -> CommandResult:
         result.text = redact_text(result.text, self.commands.settings).replace(

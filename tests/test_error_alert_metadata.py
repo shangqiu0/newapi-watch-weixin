@@ -89,8 +89,18 @@ async def test_error_notice_uses_log_time_not_alert_time(runtime: Runtime):
     assert "告警时间：" not in notice
     assert "错误码：" not in notice
     assert "北京时间" not in notice
-    assert "日志 ID：1" in notice
-    assert "上游请求 ID：upstream-002" in notice
+    assert "日志 ID：" not in notice
+    assert notice.splitlines() == [
+        "渠道异常告警",
+        "渠道：from 灵芒（#49）",
+        "状态码：502",
+        "模型：kimi-k3.1-pro",
+        "错误信息：Upstream service is unreachable",
+        "错误日志时间：2026年11月14日 11:34:09",
+        "上游请求 ID：upstream-002",
+        "平台请求 ID：platform-001",
+        "上轮冷却窗口内同类错误累计：1 次",
+    ]
     assert "上游请求 ID：platform-001" not in notice
 
 
@@ -109,7 +119,7 @@ async def test_missing_all_ids_still_includes_real_log_time(runtime: Runtime):
     notice = (await runtime.store.notifications())[0]["content"]
     assert "错误日志时间：2026年11月14日 11:34:09" in notice
     assert "上游请求 ID：未提供" in notice
-    assert "平台请求 ID：" not in notice
+    assert "平台请求 ID：未提供" in notice
 
 
 async def test_saved_legacy_template_automatically_includes_new_metadata(runtime: Runtime):
@@ -232,7 +242,7 @@ async def test_error_time_matches_current_platform_log_display(
     await service(runtime).errors([log], now=ALERT_AT)
     notice = (await runtime.store.notifications())[0]["content"]
     assert f"错误日志时间：{expected}\n" in notice
-    assert "日志 ID：123456" in notice
+    assert "日志 ID：" not in notice
     assert log.created_at == raw["created_at"] == LOG_AT
     assert "北京时间" not in notice
     assert "告警时间：" not in notice and "错误码：" not in notice
@@ -252,7 +262,7 @@ async def test_cooldown_renders_original_timestamp_in_current_platform_timezone(
     await service(runtime).errors([], now=ALERT_AT + 60)
     notice = (await runtime.store.notifications())[1]["content"]
     assert "错误日志时间：2026年11月14日 03:34:10\n" in notice
-    assert "日志 ID：2" in notice
+    assert "日志 ID：" not in notice
     assert "上游请求 ID：upstream-pending" in notice
     assert "11:34:10" not in notice
 
@@ -287,6 +297,6 @@ async def test_source_log_id_disambiguates_errors_in_same_second(runtime: Runtim
     assert len(notices) == 2
     first = next(text for text in notices if "（#49）" in text)
     second = next(text for text in notices if "（#50）" in text)
-    assert "日志 ID：101" in first
-    assert "日志 ID：102" in second
+    assert "日志 ID：" not in first
+    assert "日志 ID：" not in second
     assert all("错误日志时间：2026年11月14日 11:34:09" in text for text in notices)

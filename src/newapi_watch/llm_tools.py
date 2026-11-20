@@ -68,6 +68,10 @@ SCHEMAS: dict[str, tuple[type[BaseModel], str]] = {
         "实时读取绑定平台全部渠道汇总和分页明细；超过一页可连续翻页，不触发探测",
     ),
     "get_channel": (ChannelArgs, "查询当前平台单渠道详情，不触发探测"),
+    "get_channel_today_usage": (
+        ChannelArgs,
+        "按渠道ID查询今天零点至查询时的消耗quota和人民币显示；不是累计用量。只有渠道名称时先用get_channels匹配，重名请确认ID。",
+    ),
     "search_users": (UserArgs, "查询当前平台指定用户额度和用量，不返回凭证"),
     "get_usage_summary": (
         UsageArgs,
@@ -84,7 +88,11 @@ SCHEMAS: dict[str, tuple[type[BaseModel], str]] = {
     ),
     "get_upstream_balance": (
         UpstreamArgs,
-        "通过上游自身账户接口实时查询已绑定账户的余额和已用金额，不能查询其他用户",
+        "通过上游自身账户接口实时查询已绑定账户的余额和累计已用金额，不能查询其他用户",
+    ),
+    "get_upstream_today_usage": (
+        UpstreamArgs,
+        "实时查询已授权的上游账户，从账户时区零点到本次查询时的今日已用金额和统计截止时间，不是累计已用或单渠道用量",
     ),
 }
 
@@ -152,7 +160,17 @@ class Tools:
                     "items": [a.public() for a in service.visible(binding)],
                     "source": "configured_upstream_accounts",
                 }
+            if name == "get_upstream_today_usage":
+                try:
+                    usage = await service.query_today_usage(args["account_id"], binding_id=binding)
+                except ValueError as error:
+                    reason = f"上游账户今日用量查询失败：{error}"
+                    self.failures.append(reason)
+                    return {"ok": False, "error": reason, "complete": False}
+                return {"ok": True, **usage}
             return {"ok": True, **await service.query(args["account_id"], binding_id=binding)}
+        if name == "get_channel_today_usage":
+            return {"ok": True, **await self.commands.data.channel_today_usage(args["channel_id"])}
         if name == "get_channel":
             return {"ok": True, **await self.commands.data.channel(args["channel_id"])}
         if name == "get_channels":

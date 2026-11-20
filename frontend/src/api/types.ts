@@ -375,6 +375,7 @@ export interface UpstreamAccount {
   poll_seconds: number;
   currency: Currency;
   threshold_cny: string;
+  threshold_display?: string;
   recovery_threshold_cny: string | null;
   cooldown_seconds: number;
   notify_recovery: boolean;
