@@ -1,3 +1,4 @@
+import { routeLocationKey } from "vue-router";
 import { beforeEach, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -10,6 +11,7 @@ vi.mock("@/api/console", () => ({
 import { request } from "@/api/console";
 import { usePlatformStore } from "../src/store/modules/platform";
 import Upstreams from "../src/views/console/upstreams.vue";
+import Balances from "../src/views/console/balances.vue";
 import DataManagement from "../src/components/Console/Settings/DataManagement.vue";
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -26,6 +28,9 @@ it("上游账户分列显示今日和累计消费，未读取不伪造为零", a
         user_id: 7,
         currency: {},
         enabled: true,
+        monitor_enabled: true,
+        threshold_cny: "1234.5",
+        threshold_display: "¥1,234.50",
         sample: {
           quota_display: "¥70.00",
           used_quota_display: "¥99.00",
@@ -45,7 +50,9 @@ it("上游账户分列显示今日和累计消费，未读取不伪造为零", a
   });
   const view = mount(Upstreams, { global: { plugins: [ElementPlus, Table] } });
   await flushPromises();
-  expect(view.text()).toContain("今日已用");
+  const headers = view.findAll("th").map(header => header.text());
+  expect(headers[headers.indexOf("今日已用（¥）") + 1]).toBe("提醒阈值（¥）");
+  expect(view.text()).toContain("¥1,234.50");
   expect(view.text()).toContain("¥12.50");
   expect(view.text()).toContain("累计已用");
   expect(view.text()).toContain("截至");
@@ -170,5 +177,22 @@ it("数据管理显示各类最近清理数量及后台续清理状态", async (
   expect(view.text()).toContain("本地日志 9 条");
   expect(view.text()).toContain("操作记录 500 条");
   expect(view.text()).toContain("积压记录将在一分钟后继续清理");
+  view.unmount();
+});
+
+it("用户余额监控将当前余额放在提醒阈值之前", async () => {
+  vi.mocked(request).mockResolvedValue({
+    config: { balances: [] },
+    samples: []
+  });
+  const view = mount(Balances, {
+    global: {
+      plugins: [ElementPlus, Table],
+      provide: { [routeLocationKey]: { query: {} } }
+    }
+  });
+  await flushPromises();
+  const headers = view.findAll("th").map(header => header.text());
+  expect(headers.slice(0, 3)).toEqual(["用户", "当前余额", "提醒阈值（¥）"]);
   view.unmount();
 });

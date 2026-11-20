@@ -99,6 +99,7 @@ class UpstreamAccount(BaseModel):
     def public(self) -> dict[str, Any]:
         result = self.model_dump(mode="json", exclude={"access_token"})
         result["has_access_token"] = bool(self.access_token.get_secret_value())
+        result["threshold_display"] = f"¥{self.threshold_cny:,.2f}"
         return result
 
 

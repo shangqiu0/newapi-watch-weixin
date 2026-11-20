@@ -91,13 +91,13 @@ async function save() {
 const sample = (id: number) => state.data.value?.samples.find(s => s.id === id);
 const columns = [
   { label: "用户", slot: "user", minWidth: 180 },
+  { label: "当前余额", slot: "balance", align: "right", minWidth: 160 },
   {
     label: "提醒阈值（¥）",
     align: "right",
     minWidth: 160,
     formatter: (r: BalanceRule) => quotaText(r.threshold, r.threshold_display)
   },
-  { label: "当前余额", slot: "balance", align: "right", minWidth: 160 },
   { label: "监控状态", slot: "status", minWidth: 130 },
   {
     label: "最近成功检查",
