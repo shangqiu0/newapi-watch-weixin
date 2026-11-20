@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from .control_store import ControlStore
-from .monitoring.models import ERROR_TITLE
+from .monitoring.models import ERROR_TITLE, order_standard_error_notice
 from .notifications import GroupWebhookNotifier
 from .persistence import row
 
@@ -61,10 +61,11 @@ class Targets:
             raise RuntimeError("该策略没有启用且订阅此事件的Webhook目标")
         outgoing = f"平台：{self.name}\n{content}"
         if kind == "request_error":
-            title, _, body = content.partition("\n")
+            notice = order_standard_error_notice(content)
+            title, _, body = notice.partition("\n")
             if title != ERROR_TITLE:
-                body = content
-            outgoing = f"平台：{self.name}    类型：{ERROR_TITLE}"
+                body = notice
+            outgoing = f"平台:{self.name}  类型:{ERROR_TITLE}"
             if body:
                 outgoing += "\n" + body
         failures = 0
