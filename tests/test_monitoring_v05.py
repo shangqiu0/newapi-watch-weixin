@@ -164,11 +164,27 @@ async def test_webhook_subscription_and_actual_all_mention_do_not_cross_platform
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(receiver)) as http:
             target = Targets(control, a["id"], "A", http)
-            await target.send_for(1, "渠道异常告警", kind="request_error", mention_all=True)
-            await target.send_for(1, "渠道异常告警", kind="request_error", mention_all=True)
+            queued = (
+                "渠道异常告警\n错误日志时间：2026年11月20日 19:39:01\n日志 ID：100\n"
+                "上游请求 ID：未提供\n平台请求 ID：fixture-request\n渠道：样例（#99）\n"
+                "状态码：503\n模型：fixture-model\n错误信息：bad response status code 503\n"
+                "上轮冷却窗口内同类错误累计：3 次"
+            )
+            await target.send_for(1, queued, kind="request_error", mention_all=True)
+            await target.send_for(1, queued, kind="request_error", mention_all=True)
         assert len(sent) == 1 and sent[0][0] == "a-errors"
         assert sent[0][1]["msgtype"] == "text" and sent[0][1]["text"]["mentioned_list"] == ["@all"]
-        assert sent[0][1]["text"]["content"] == "平台：A    类型：渠道异常告警"
+        assert sent[0][1]["text"]["content"].splitlines() == [
+            "平台:A  类型:渠道异常告警",
+            "状态码：503",
+            "渠道：样例（#99）",
+            "模型：fixture-model",
+            "错误信息：bad response status code 503",
+            "上游请求 ID：未提供",
+            "平台请求 ID：fixture-request",
+            "错误日志时间：2026年11月20日 19:39:01",
+            "上轮冷却窗口内同类错误累计：3 次",
+        ]
     finally:
         await control.close()
 

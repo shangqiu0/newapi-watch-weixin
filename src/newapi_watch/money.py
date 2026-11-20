@@ -101,6 +101,8 @@ def decorate_money(value: Any, currency: CurrencyConfig) -> Any:
     result = {key: decorate_money(item, currency) for key, item in value.items()}
     for key in ("quota", "used_quota", "threshold", "recovery_threshold"):
         if type(value.get(key)) is int:
+            if key in ("threshold", "recovery_threshold"):
+                result[key + "_quota"] = str(value[key])
             result[key + "_display"] = currency.display(value[key])
             result[key + "_cny"] = currency.amount(value[key], precision=12)
     return result
@@ -126,6 +128,8 @@ def normalize_balance_amounts(payload: dict[str, Any], currency: CurrencyConfig)
             if k
             not in {
                 "threshold_display",
+                "threshold_quota",
+                "recovery_threshold_quota",
                 "threshold_cny",
                 "recovery_threshold_display",
                 "recovery_threshold_cny",

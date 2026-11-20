@@ -142,3 +142,33 @@ it("切换平台后不把旧平台的金额候选参数写到新平台编辑框"
   expect(view.emitted("update:modelValue")).toBeUndefined();
   view.unmount();
 });
+
+it("修改已确认换算值会撤销确认，无效输入不能勾选确认", async () => {
+  const view = mount(CurrencyEditor, {
+    props: {
+      modelValue: {
+        confirmed: true,
+        quota_per_unit: "500000",
+        usd_exchange_rate: "7.3",
+        source: "status"
+      },
+      "onUpdate:modelValue": value => view.setProps({ modelValue: value })
+    },
+    global: { plugins: [ElementPlus] }
+  });
+  expect(view.text()).toContain("500000 quota = 1 USD ≈ ¥7.30");
+  await view.get('input[aria-label="人民币显示倍率"]').setValue("1e2");
+  await flushPromises();
+  expect(view.props("modelValue")).toMatchObject({
+    confirmed: false,
+    usd_exchange_rate: "1e2",
+    source: "manual"
+  });
+  expect(view.get('[role="alert"]').text()).toContain(
+    "不使用分隔符或科学计数法"
+  );
+  expect(
+    view.get<HTMLInputElement>('input[type="checkbox"]').element.disabled
+  ).toBe(true);
+  view.unmount();
+});

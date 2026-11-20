@@ -79,11 +79,26 @@ def test_malformed_optional_trace_ids_do_not_break_log_parsing(runtime: Runtime,
     assert parsed["http_status"] == 502
 
 
-async def test_error_notice_uses_log_time_not_alert_time(runtime: Runtime):
+@pytest.mark.parametrize(
+    "template",
+    [
+        None,
+        "渠道异常告警\n渠道：{channel_name}（#{channel_id}）\n状态码：{status_code}\n"
+        "模型：{model}\n错误信息：{error_message}\n错误日志时间：{log_time}\n"
+        "上游请求 ID：{upstream_request_id}\n平台请求 ID：{request_id}\n"
+        "上轮冷却窗口内同类错误累计：{count} 次",
+        "渠道异常告警\n渠道：{channel_name}（#{channel_id}）\n状态码：{status_code}\n"
+        "模型：{model}\n错误信息：{error_message}\n"
+        "上轮冷却窗口内同类错误累计：{count} 次",
+    ],
+    ids=["default", "saved-previous-default", "saved-with-implicit-metadata"],
+)
+async def test_error_notice_uses_log_time_not_alert_time(runtime: Runtime, template: str | None):
     log = runtime.client.safe_log(
         source_log(request_id="platform-001", upstream_request_id="upstream-002")
     )
-    await service(runtime).errors([log], now=ALERT_AT)
+    options = {} if template is None else {"template": template}
+    await service(runtime, **options).errors([log], now=ALERT_AT)
     notice = (await runtime.store.notifications())[0]["content"]
     assert "错误日志时间：2026年11月14日 11:34:09" in notice
     assert "告警时间：" not in notice
@@ -92,13 +107,13 @@ async def test_error_notice_uses_log_time_not_alert_time(runtime: Runtime):
     assert "日志 ID：" not in notice
     assert notice.splitlines() == [
         "渠道异常告警",
-        "渠道：from 灵芒（#49）",
         "状态码：502",
+        "渠道：from 灵芒（#49）",
         "模型：kimi-k3.1-pro",
         "错误信息：Upstream service is unreachable",
-        "错误日志时间：2026年11月14日 11:34:09",
         "上游请求 ID：upstream-002",
         "平台请求 ID：platform-001",
+        "错误日志时间：2026年11月14日 11:34:09",
         "上轮冷却窗口内同类错误累计：1 次",
     ]
     assert "上游请求 ID：platform-001" not in notice

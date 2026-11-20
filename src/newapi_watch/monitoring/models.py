@@ -17,14 +17,35 @@ LEGACY_ERROR_TEMPLATE = """渠道异常告警
 错误信息：{error_message}
 上轮冷却窗口内同类错误累计：{count} 次"""
 ERROR_TEMPLATE = f"""{ERROR_TITLE}
-渠道：{{channel_name}}（#{{channel_id}}）
 状态码：{{status_code}}
+渠道：{{channel_name}}（#{{channel_id}}）
 模型：{{model}}
 错误信息：{{error_message}}
-错误日志时间：{{log_time}}
 上游请求 ID：{{upstream_request_id}}
 平台请求 ID：{{request_id}}
+错误日志时间：{{log_time}}
 上轮冷却窗口内同类错误累计：{{count}} 次"""
+ERROR_FIELD_ORDER = tuple(line.partition("：")[0] for line in ERROR_TEMPLATE.splitlines()[1:])
+
+
+def order_standard_error_notice(text: str) -> str:
+    """Normalize recognized standard alerts without rewriting custom layouts."""
+    title, separator, body = text.partition("\n")
+    if not separator or title != ERROR_TITLE:
+        return text
+    fields: dict[str, str] = {}
+    for line in body.splitlines():
+        label, colon, _ = line.partition("：")
+        if colon and label == "日志 ID":
+            continue
+        if not colon or label not in ERROR_FIELD_ORDER or label in fields:
+            return text
+        fields[label] = line
+    if len(fields) != len(ERROR_FIELD_ORDER):
+        return text
+    return "\n".join([title, *(fields[label] for label in ERROR_FIELD_ORDER)])
+
+
 PLACEHOLDERS = {
     "channel_name",
     "channel_id",
@@ -110,7 +131,7 @@ class ErrorRule(Policy):
             if "log_time" in names:
                 line = line.replace("（北京时间）", "").replace("(北京时间)", "")
             lines.append(line)
-        return "\n".join(lines).strip() or ERROR_TEMPLATE
+        return order_standard_error_notice("\n".join(lines).strip()) or ERROR_TEMPLATE
 
 
 class BalanceRule(Policy):

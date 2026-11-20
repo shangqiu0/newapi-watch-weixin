@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useSettingsDraft } from "@/composables/useSettingsDraft";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { request, perform } from "@/api/console";
 import { usePlatformStore } from "@/store/modules/platform";
 import type { Currency } from "@/api/types";
+import { validateCurrencyDraft } from "@/utils/moneyInput";
 import CurrencyEditor from "@/components/Console/CurrencyEditor.vue";
 const platform = usePlatformStore();
 const currency = ref<Currency>({
@@ -13,6 +14,15 @@ const currency = ref<Currency>({
   source: "manual"
 });
 const saving = ref(false);
+const needsConfirmation = computed(() => {
+  const previous = platform.current?.currency;
+  return Boolean(
+    previous?.confirmed &&
+    !currency.value.confirmed &&
+    (previous.quota_per_unit !== currency.value.quota_per_unit.trim() ||
+      previous.usd_exchange_rate !== currency.value.usd_exchange_rate.trim())
+  );
+});
 const dirty = useSettingsDraft();
 watch(
   currency,
@@ -38,12 +48,20 @@ watch(
   { immediate: true }
 );
 async function save(): Promise<void> {
-  if (!platform.currentId || saving.value) return;
+  if (!platform.currentId || saving.value || needsConfirmation.value) return;
   const id = platform.currentId;
+  const error = validateCurrencyDraft(currency.value);
+  if (error) return;
   saving.value = true;
   try {
     await perform(async () => {
-      await request(`/platforms/${id}`, "PATCH", { currency: currency.value });
+      await request(`/platforms/${id}`, "PATCH", {
+        currency: {
+          ...currency.value,
+          quota_per_unit: currency.value.quota_per_unit.trim(),
+          usd_exchange_rate: currency.value.usd_exchange_rate.trim()
+        }
+      });
       if (platform.currentId === id) {
         dirty.value = false;
         await platform.load(id);
@@ -57,12 +75,11 @@ async function save(): Promise<void> {
 <template>
   <div class="settings-panel">
     <section class="surface form-section">
-      <h2>当前平台 · 人民币额度</h2>
-      <el-alert
-        title="截图上的 ¥ 不能单独确定倍率。请读取平台参数，或按该平台实际设置填写；未确认时不会把 quota 冒充人民币。"
-        type="info"
-        :closable="false"
-      />
+      <h2>金额显示</h2>
+      <p class="section-footnote">
+        {{ platform.current?.name ?? "当前平台" }} ·
+        余额、用量和用户监控阈值的人民币显示
+      </p>
       <el-form label-position="top" @submit.prevent="save">
         <CurrencyEditor
           v-model="currency"
@@ -72,20 +89,27 @@ async function save(): Promise<void> {
               : undefined
           "
         />
+        <p v-if="needsConfirmation" class="section-footnote" role="alert">
+          参数已变更，请核对并重新确认后再保存。
+        </p>
         <div class="form-footer">
           <el-button
             type="primary"
             native-type="submit"
             :loading="saving"
-            :disabled="!platform.currentId"
+            :disabled="
+              !platform.currentId ||
+              !!validateCurrencyDraft(currency) ||
+              needsConfirmation
+            "
             >保存金额设置</el-button
           >
         </div>
       </el-form>
       <p class="section-footnote">
-        修改倍率只改变显示，不静默重算既有 quota
-        阈值。每个上游账户的倍率在「上游账户」中独立配置。渠道供应商 balance
-        单位未确认，不自动套用此公式。
+        显示金额 = quota ÷ 每 USD 对应的 quota ×
+        人民币汇率。修改口径不重算已有用户监控的整数 quota
+        阈值；上游账户使用各自的参数。
       </p>
     </section>
   </div>

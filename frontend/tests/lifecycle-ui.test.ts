@@ -196,3 +196,83 @@ it("用户余额监控将当前余额放在提醒阈值之前", async () => {
   expect(headers.slice(0, 3)).toEqual(["用户", "当前余额", "提醒阈值（¥）"]);
   view.unmount();
 });
+
+it.each([false, true])(
+  "阈值回填只显示两位小数并保留未编辑的 quota（修改金额：%s）",
+  async edited => {
+    const platform = usePlatformStore();
+    platform.list = [
+      {
+        id: "A",
+        name: "中转平台",
+        currency: {
+          confirmed: true,
+          quota_per_unit: "500000",
+          usd_exchange_rate: "7.3",
+          source: "status"
+        }
+      }
+    ] as typeof platform.list;
+    vi.mocked(request).mockResolvedValue({
+      config: {
+        balance_poll_seconds: 300,
+        balances: [
+          {
+            user_id: 29,
+            name: "示例用户",
+            threshold: 684931508,
+            recovery_threshold: 9007199254740992,
+            recovery_threshold_quota: "9007199254740993",
+            threshold_cny: "10000.000022000000",
+            recovery_threshold_cny: "10220.000014600000",
+            enabled: true,
+            confirmations: 1,
+            cooldown_seconds: 300,
+            binding_ids: [],
+            notify_recovery: true,
+            mention_all: false
+          }
+        ]
+      },
+      samples: [],
+      errors: {}
+    });
+    const view = mount(Balances, {
+      global: {
+        plugins: [ElementPlus, Table],
+        provide: { [routeLocationKey]: { query: {} } }
+      }
+    });
+    await flushPromises();
+    await view
+      .findAll("button")
+      .find(b => b.text() === "编辑")
+      .trigger("click");
+    await flushPromises();
+    const threshold = view.get<HTMLInputElement>(
+      'input[aria-label="余额阈值人民币"]'
+    );
+    expect(threshold.element.value).toBe("10000.00");
+    expect(
+      view.get<HTMLInputElement>('input[aria-label="恢复阈值人民币"]').element
+        .value
+    ).toBe("10220.00");
+    if (edited) await threshold.setValue("¥10,001.50");
+    await view.find("form").trigger("submit");
+    await flushPromises();
+    const payload = vi
+      .mocked(request)
+      .mock.calls.find(([, method]) => method === "PUT")?.[2];
+    expect(payload).toMatchObject({
+      balances: [
+        { threshold: 684931508, recovery_threshold: "9007199254740993" }
+      ]
+    });
+    if (edited)
+      expect(payload).toHaveProperty("balance_amounts", {
+        "29": { threshold_cny: "10001.50" }
+      });
+    else expect(payload).not.toHaveProperty("balance_amounts");
+    view.unmount();
+  }
+);

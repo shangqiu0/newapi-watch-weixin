@@ -17,7 +17,7 @@ from ..notifications import truncate_utf8
 from ..persistence import enqueue, row, rows
 from ..redaction import redact_text
 from .error_scans import SCAN_KEY, ErrorScan
-from .models import ERROR_TEMPLATE, ErrorRule, MonitoringConfig
+from .models import ERROR_TEMPLATE, ErrorRule, MonitoringConfig, order_standard_error_notice
 
 if TYPE_CHECKING:
     from ..runtime import Runtime
@@ -40,25 +40,27 @@ def preview(rule: ErrorRule, sample: dict[str, Any], *, timezone: str = "Asia/Sh
         values["log_time"] = error_log_time(sample["log_created_at"], timezone)
     for field in ("log_time", "request_id", "upstream_request_id"):
         values[field] = values[field] or "未提供"
-    if rule.template == ERROR_TEMPLATE:
+    template = rule.template
+    fields = {name for _, name, _, _ in Formatter().parse(template)}
+    metadata = [
+        f"{label}：{{{field}}}"
+        for field, label in (
+            ("log_time", "错误日志时间"),
+            ("upstream_request_id", "上游请求 ID"),
+            ("request_id", "平台请求 ID"),
+        )
+        if field not in fields
+    ]
+    if metadata:
+        # Preserve custom layouts while keeping omitted trace details visible.
+        title, separator, body = template.partition("\n")
+        template = "\n".join([title, *metadata, body] if separator else [*metadata, template])
+    template = order_standard_error_notice(template)
+    if template == ERROR_TEMPLATE:
         # Keep the trace fields after the error text without exceeding the text Webhook budget.
         for field, limit in (("channel_name", 160), ("model", 120), ("error_message", 900)):
             values[field] = truncate_utf8(str(values[field]), limit)
-    text = rule.template.format_map(values)
-    fields = {name for _, name, _, _ in Formatter().parse(rule.template)}
-    metadata = []
-    for field, label in (
-        ("log_time", "错误日志时间"),
-        ("upstream_request_id", "上游请求 ID"),
-        ("request_id", "平台请求 ID"),
-    ):
-        if field not in fields:
-            metadata.append(f"{label}：{values[field]}")
-    if not metadata:
-        return text
-    # Keep trace details ahead of long error messages, including saved legacy templates.
-    title, separator, body = text.partition("\n")
-    return "\n".join([title, *metadata, body] if separator else [*metadata, text])
+    return template.format_map(values)
 
 
 def error_log_time(created_at: int, timezone: str) -> str:
