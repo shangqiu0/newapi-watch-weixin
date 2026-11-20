@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { ref, reactive, watch } from "vue";
+import { computed, ref, reactive, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
-import { useMonitoring } from "@/composables/useMonitoring";
+import {
+  useMonitoring,
+  type BalanceAmountEdit
+} from "@/composables/useMonitoring";
 import { quotaText, timeCN } from "@/utils/format";
 import type { BalanceRule } from "@/api/types";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import PolicyTargets from "@/components/Console/PolicyTargets.vue";
 import StatusDot from "@/components/Console/StatusDot.vue";
+import { readYuanThresholds, yuanForEditing } from "@/utils/moneyInput";
+import YuanThresholdFields from "@/components/Console/YuanThresholdFields.vue";
+const amountError = ref("");
 const state = useMonitoring(),
   config = state.config,
   route = useRoute(),
@@ -38,13 +44,15 @@ const amountThreshold = ref("0"),
 let initialThreshold = "",
   initialRecovery = "";
 function edit(rule?: BalanceRule) {
-  amountThreshold.value = rule?.threshold_cny ?? "0";
-  amountRecovery.value = rule?.recovery_threshold_cny ?? "";
+  amountThreshold.value = rule ? yuanForEditing(rule.threshold_cny) : "";
+  amountRecovery.value = yuanForEditing(rule?.recovery_threshold_cny);
+  amountError.value = "";
   initialThreshold = amountThreshold.value;
   initialRecovery = amountRecovery.value;
   editing.value = rule?.user_id ?? null;
   Object.assign(
     form,
+    { threshold_quota: undefined, recovery_threshold_quota: undefined },
     rule ?? {
       binding_ids: [],
       confirmations: 1,
@@ -68,26 +76,43 @@ async function save() {
     ElMessage.error("该用户已有余额监控，请使用编辑操作");
     return;
   }
-  const changed =
+  amountError.value = "";
+  const draft: BalanceAmountEdit = {};
+  if (
     editing.value === null ||
     amountThreshold.value !== initialThreshold ||
-    amountRecovery.value !== initialRecovery;
-  if (changed && !state.platform.current?.currency?.confirmed) {
-    ElMessage.error("请先到金额显示页面确认当前平台人民币换算");
-    return;
+    amountRecovery.value !== initialRecovery
+  ) {
+    if (!currencyConfirmed.value) {
+      amountError.value = "请先在平台设置 → 金额显示中确认换算参数";
+      return;
+    }
+    try {
+      const value = readYuanThresholds(
+        amountThreshold.value,
+        amountRecovery.value
+      );
+      if (editing.value === null || value.low !== initialThreshold)
+        draft.threshold_cny = value.low;
+      if ((value.recovery ?? "") !== initialRecovery)
+        draft.recovery_threshold_cny = value.recovery;
+    } catch (error) {
+      amountError.value = (error as Error).message;
+      return;
+    }
   }
-  if (i >= 0) config.value.balances[i] = { ...form };
-  else config.value.balances.push({ ...form });
-  const edits = changed
-    ? {
-        [String(form.user_id)]: {
-          threshold_cny: amountThreshold.value,
-          recovery_threshold_cny: amountRecovery.value || null
-        }
-      }
+  const balances = [...config.value.balances];
+  if (i >= 0) balances[i] = { ...form };
+  else balances.push({ ...form });
+  const edits = Object.keys(draft).length
+    ? { [String(form.user_id)]: draft }
     : undefined;
-  if (await state.save(edits)) dialog.value = false;
+  if (await state.save(edits, balances)) dialog.value = false;
 }
+const currencyConfirmed = computed(() =>
+  Boolean(state.platform.current?.currency?.confirmed)
+);
+
 const sample = (id: number) => state.data.value?.samples.find(s => s.id === id);
 const columns = [
   { label: "用户", slot: "user", minWidth: 180 },
@@ -220,58 +245,78 @@ watch(
     <el-dialog
       v-model="dialog"
       :title="editing ? '编辑用户余额监控' : '新增用户余额监控'"
+      class="money-balance-dialog"
+      top="4vh"
       width="min(680px, 96vw)"
       destroy-on-close
-      ><el-form label-position="top" @submit.prevent="save"
-        ><el-form-item label="本平台用户 ID"
-          ><el-input-number
-            v-model="form.user_id"
-            :min="1"
-            :disabled="!!editing" /></el-form-item
-        ><el-form-item label="监控名称"
-          ><el-input v-model="form.name" maxlength="80" /></el-form-item
-        ><el-form-item label="余额低于此阈值时提醒（¥）"
-          ><el-input
-            v-model="amountThreshold"
-            aria-label="余额阈值人民币"
-            inputmode="decimal"
-            :disabled="!state.platform.current?.currency?.confirmed"
-            placeholder="人民币金额，后端精确换算"
-        /></el-form-item>
-        <div class="form-grid">
-          <el-form-item label="此用户检查间隔（秒，留空用平台默认）"
-            ><el-input-number
-              v-model="form.poll_seconds"
-              :min="30"
-              :max="86400" /></el-form-item
-          ><el-form-item label="连续不足确认次数"
-            ><el-input-number
-              v-model="form.confirmations"
-              :min="1"
-              :max="20" /></el-form-item
-          ><el-form-item label="恢复阈值（¥，可选）"
-            ><el-input
-              v-model="amountRecovery"
-              aria-label="恢复阈值人民币"
-              inputmode="decimal"
-              :disabled="
-                !state.platform.current?.currency?.confirmed
-              " /></el-form-item
-          ><el-form-item label="重复提醒冷却（秒）"
-            ><el-input-number
-              v-model="form.cooldown_seconds"
-              :min="30"
-              :max="86400"
+    >
+      <el-form label-position="top" @submit.prevent="save">
+        <section class="money-form-section" aria-label="监控对象">
+          <h3>监控对象</h3>
+          <div class="form-grid">
+            <el-form-item label="本平台用户 ID"
+              ><el-input-number
+                v-model="form.user_id"
+                :min="1"
+                :disabled="editing !== null"
+            /></el-form-item>
+            <el-form-item label="监控名称"
+              ><el-input v-model="form.name" maxlength="80"
+            /></el-form-item>
+          </div>
+        </section>
+        <section class="money-form-section" aria-label="余额阈值">
+          <h3>余额阈值</h3>
+          <p v-if="currencyConfirmed" class="section-footnote">
+            按当前平台人民币口径填写。未改动的金额保留原始
+            quota，不会因回填取整而改变。
+          </p>
+          <p v-else class="section-footnote">
+            请先到「平台设置 → 金额显示」确认换算参数，才能填写人民币阈值。
+          </p>
+          <YuanThresholdFields
+            v-model:low="amountThreshold"
+            v-model:recovery="amountRecovery"
+            :disabled="!currencyConfirmed"
+            :error="amountError"
+            @edited="amountError = ''"
+          />
+        </section>
+        <section class="money-form-section" aria-label="检查与通知">
+          <h3>检查与通知</h3>
+          <div class="form-grid money-check-grid">
+            <el-form-item label="检查间隔（秒）"
+              ><el-input-number
+                v-model="form.poll_seconds"
+                :min="30"
+                :max="86400"
+                placeholder="平台默认"
+            /></el-form-item>
+            <el-form-item label="连续不足确认次数"
+              ><el-input-number v-model="form.confirmations" :min="1" :max="20"
+            /></el-form-item>
+            <el-form-item label="重复提醒冷却（秒）"
+              ><el-input-number
+                v-model="form.cooldown_seconds"
+                :min="30"
+                :max="86400"
+            /></el-form-item>
+          </div>
+          <el-form-item label="通知 Webhook"
+            ><PolicyTargets v-model="form.binding_ids" kind="balance"
           /></el-form-item>
-        </div>
-        <el-form-item label="通知 Webhook"
-          ><PolicyTargets
-            v-model="form.binding_ids"
-            kind="balance" /></el-form-item
-        ><el-form-item label="启用监控"
-          ><el-switch v-model="form.enabled" /></el-form-item
-        ><el-checkbox v-model="form.notify_recovery">余额恢复时通知</el-checkbox
-        ><el-checkbox v-model="form.mention_all">@ 所有人</el-checkbox>
+          <div class="money-form-options">
+            <el-switch
+              v-model="form.enabled"
+              active-text="启用监控"
+              aria-label="启用监控"
+            />
+            <el-checkbox v-model="form.notify_recovery"
+              >余额恢复时通知</el-checkbox
+            >
+            <el-checkbox v-model="form.mention_all">@ 所有人</el-checkbox>
+          </div>
+        </section>
         <div class="form-footer">
           <el-button @click="dialog = false">取消</el-button
           ><el-button

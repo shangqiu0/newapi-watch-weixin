@@ -3,7 +3,15 @@ import { usePlatformStore } from "@/store/modules/platform";
 import { useRemote } from "./useRemote";
 import { ElMessage } from "element-plus";
 import { request } from "@/api/console";
-import type { MonitoringConfig, MonitoringData } from "@/api/types";
+import type {
+  BalanceRule,
+  MonitoringConfig,
+  MonitoringData
+} from "@/api/types";
+export type BalanceAmountEdit = {
+  threshold_cny?: string;
+  recovery_threshold_cny?: string | null;
+};
 export function useMonitoring() {
   const platform = usePlatformStore();
   const remote = useRemote<MonitoringData>(() =>
@@ -15,15 +23,22 @@ export function useMonitoring() {
     config.value = data ? JSON.parse(JSON.stringify(data.config)) : null;
   });
   async function save(
-    balanceAmounts?: Record<
-      string,
-      { threshold_cny: string; recovery_threshold_cny: string | null }
-    >
+    balanceAmounts?: Record<string, BalanceAmountEdit>,
+    balances?: BalanceRule[]
   ): Promise<boolean> {
     if (!config.value || saving.value) return false;
     saving.value = true;
     const id = platform.currentId;
     const payload = JSON.parse(JSON.stringify(config.value));
+    if (balances) payload.balances = balances;
+    payload.balances = ((payload.balances ?? []) as BalanceRule[]).map(
+      rule => ({
+        ...rule,
+        threshold: rule.threshold_quota ?? rule.threshold,
+        recovery_threshold:
+          rule.recovery_threshold_quota ?? rule.recovery_threshold
+      })
+    );
     if (balanceAmounts) payload.balance_amounts = balanceAmounts;
     try {
       await request(`/platforms/${id}/monitoring`, "PUT", payload);

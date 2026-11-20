@@ -361,6 +361,8 @@ export interface MoneyFields {
   threshold_display?: string;
   threshold_cny?: string | null;
   recovery_threshold_cny?: string | null;
+  threshold_quota?: string;
+  recovery_threshold_quota?: string;
 }
 export interface UpstreamAccount {
   usage_timezone?: string;

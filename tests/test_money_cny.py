@@ -3,7 +3,13 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from newapi_watch.money import CurrencyConfig, currency_candidate, decorate_money
+from newapi_watch.money import (
+    CurrencyConfig,
+    currency_candidate,
+    decorate_money,
+    normalize_balance_amounts,
+)
+from newapi_watch.monitoring.models import MonitoringConfig
 
 
 def currency():
@@ -67,3 +73,19 @@ def test_annotations_keep_raw_numbers_and_do_not_convert_supplier_balance():
     assert result["used_quota_display"] == "¥14.60"
     assert result["items"][0]["quota_display"] == "¥<0.01"
     assert "balance_display" not in result and "quota_display" not in raw
+
+
+def test_monitoring_threshold_exact_text_survives_json_number_precision():
+    threshold = 9_007_199_254_740_993
+    raw = {
+        "balances": [{"user_id": 29, "threshold": threshold, "recovery_threshold": threshold + 2}]
+    }
+    response = decorate_money(raw, currency())
+    rule = response["balances"][0]
+    assert rule["threshold_quota"] == "9007199254740993"
+    assert rule["recovery_threshold_quota"] == "9007199254740995"
+    rule["threshold"] = rule["threshold_quota"]
+    rule["recovery_threshold"] = rule["recovery_threshold_quota"]
+    normalized = MonitoringConfig.model_validate(normalize_balance_amounts(response, currency()))
+    assert normalized.balances[0].threshold == threshold
+    assert normalized.balances[0].recovery_threshold == threshold + 2

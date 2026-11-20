@@ -9,6 +9,12 @@ import type { UpstreamAccount, Currency, Page } from "@/api/types";
 import { timeCN } from "@/utils/format";
 import ConsolePage from "@/components/Console/ConsolePage.vue";
 import CurrencyEditor from "@/components/Console/CurrencyEditor.vue";
+import YuanThresholdFields from "@/components/Console/YuanThresholdFields.vue";
+import {
+  readYuanThresholds,
+  validateCurrencyDraft,
+  yuanForEditing
+} from "@/utils/moneyInput";
 const platform = usePlatformStore(),
   page = ref(1),
   size = ref(20);
@@ -54,6 +60,29 @@ function initial() {
   };
 }
 const form = reactive(initial());
+const amountError = ref("");
+const original = ref<UpstreamAccount | null>(null);
+const sameSource = computed(
+  () =>
+    original.value !== null &&
+    form.base_url.trim() === original.value.base_url &&
+    form.user_id === original.value.user_id
+);
+const currencyPreviewPath = computed(() =>
+  editing.value && sameSource.value
+    ? `/platforms/${platform.currentId}/upstream-accounts/${editing.value}/currency-previews`
+    : undefined
+);
+watch([() => form.base_url, () => form.user_id], () => {
+  if (
+    dialog.value &&
+    original.value &&
+    !sameSource.value &&
+    form.currency.confirmed
+  ) {
+    form.currency = { ...form.currency, source: "manual", confirmed: false };
+  }
+});
 const bindings = computed(() => platform.overview?.bindings ?? []);
 const bots = computed(() => bindings.value.filter(b => b.kind === "bot"));
 const targets = computed(() =>
@@ -65,6 +94,8 @@ const targets = computed(() =>
 );
 function edit(account?: UpstreamAccount): void {
   editing.value = account?.id ?? null;
+  original.value = account ?? null;
+  amountError.value = "";
   const values = initial();
   if (account)
     for (const key of Object.keys(values)) {
@@ -76,7 +107,10 @@ function edit(account?: UpstreamAccount): void {
     JSON.parse(
       JSON.stringify({
         ...values,
-        recovery_threshold_cny: account?.recovery_threshold_cny ?? "",
+        threshold_cny: yuanForEditing(
+          account?.threshold_cny ?? values.threshold_cny
+        ),
+        recovery_threshold_cny: yuanForEditing(account?.recovery_threshold_cny),
         access_token: ""
       })
     )
@@ -85,13 +119,48 @@ function edit(account?: UpstreamAccount): void {
 }
 async function save(): Promise<void> {
   if (busy.value) return;
+  amountError.value = "";
+  const currencyError = validateCurrencyDraft(form.currency);
+  if (currencyError) {
+    ElMessage.error(currencyError);
+    return;
+  }
+  const saved = original.value;
+  let values: ReturnType<typeof readYuanThresholds>;
+  try {
+    values = readYuanThresholds(
+      form.threshold_cny,
+      form.recovery_threshold_cny
+    );
+  } catch (error) {
+    amountError.value = (error as Error).message;
+    return;
+  }
+  if (form.monitor_enabled && !form.currency.confirmed) {
+    amountError.value = "开启余额监控前，请先确认该上游账户的人民币换算参数";
+    return;
+  }
   busy.value = true;
   const id = platform.currentId;
   try {
     await perform(async () => {
       const payload = {
         ...form,
-        recovery_threshold_cny: form.recovery_threshold_cny || null
+        currency: {
+          ...form.currency,
+          quota_per_unit: form.currency.quota_per_unit.trim(),
+          usd_exchange_rate: form.currency.usd_exchange_rate.trim()
+        },
+        threshold_cny:
+          saved && values.low === yuanForEditing(saved.threshold_cny)
+            ? saved.threshold_cny
+            : values.low,
+        recovery_threshold_cny:
+          saved &&
+          (values.recovery ?? "") ===
+            yuanForEditing(saved.recovery_threshold_cny)
+            ? saved.recovery_threshold_cny
+            : values.recovery
       };
       await request(
         `/platforms/${id}/upstream-accounts${editing.value ? "/" + editing.value : ""}`,
@@ -288,110 +357,122 @@ const displayedColumns = computed(() =>
       destroy-on-close
     >
       <el-form label-position="top" @submit.prevent="save">
-        <div class="form-grid">
-          <el-form-item label="账户名称"
-            ><el-input
-              v-model="form.name"
-              required
-              maxlength="80" /></el-form-item
-          ><el-form-item label="上游平台地址"
-            ><el-input
-              v-model="form.base_url"
-              placeholder="https://upstream.example"
-              required /></el-form-item
-          ><el-form-item label="上游自身用户 ID"
-            ><el-input-number v-model="form.user_id" :min="1" /></el-form-item
-          ><el-form-item label="普通用户访问令牌（不是模型 Key）"
-            ><el-input
-              v-model="form.access_token"
-              type="password"
-              show-password
-              autocomplete="new-password"
-              :placeholder="
-                editing
-                  ? '留空保留原令牌；更换地址或用户须重填'
-                  : '仅需该上游的普通用户令牌'
-              "
+        <section class="money-form-section" aria-label="账户接入">
+          <h3>账户接入</h3>
+          <div class="form-grid">
+            <el-form-item label="账户名称"
+              ><el-input
+                v-model="form.name"
+                required
+                maxlength="80" /></el-form-item
+            ><el-form-item label="上游平台地址"
+              ><el-input
+                v-model="form.base_url"
+                placeholder="https://upstream.example"
+                required /></el-form-item
+            ><el-form-item label="上游自身用户 ID"
+              ><el-input-number v-model="form.user_id" :min="1" /></el-form-item
+            ><el-form-item label="普通用户访问令牌（不是模型 Key）"
+              ><el-input
+                v-model="form.access_token"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                :placeholder="
+                  editing
+                    ? '留空保留原令牌；更换地址或用户须重填'
+                    : '仅需该上游的普通用户令牌'
+                "
+            /></el-form-item>
+          </div>
+          <el-form-item label="启用接入"
+            ><el-switch v-model="form.enabled"
           /></el-form-item>
-        </div>
-        <h3>人民币显示口径</h3>
-        <el-form-item label="今日统计时区"
-          ><el-select
-            v-model="form.usage_timezone"
-            filterable
-            allow-create
-            default-first-option
-            ><el-option
-              value=""
-              :label="`继承平台时区 · ${platform.current?.timezone ?? 'Asia/Shanghai'}`" /><el-option
-              value="Asia/Shanghai"
-              label="北京时间 · Asia/Shanghai" /><el-option
-              value="America/New_York"
-              label="美国东部 · America/New_York" /><el-option
-              value="UTC"
-              label="UTC" /></el-select
-        ></el-form-item>
-        <CurrencyEditor
-          v-model="form.currency"
-          :preview-path="
-            editing
-              ? `/platforms/${platform.currentId}/upstream-accounts/${editing}/currency-previews`
-              : undefined
-          "
-        />
-        <el-form-item label="允许查询的本平台机器人"
-          ><el-select
-            v-model="form.query_binding_ids"
-            multiple
-            placeholder="留空则不开放给机器人；网页仍可查询"
-            ><el-option
-              v-for="b in bots"
-              :key="b.id"
-              :value="b.id"
-              :label="b.name" /></el-select
-        ></el-form-item>
-        <div class="form-grid">
-          <el-form-item label="低于此余额提醒（¥）"
-            ><el-input
-              v-model="form.threshold_cny"
-              inputmode="decimal" /></el-form-item
-          ><el-form-item label="恢复阈值（¥，可选）"
-            ><el-input
-              v-model="form.recovery_threshold_cny"
-              inputmode="decimal" /></el-form-item
-          ><el-form-item label="检查间隔（秒）"
-            ><el-input-number
-              v-model="form.poll_seconds"
-              :min="30"
-              :max="86400" /></el-form-item
-          ><el-form-item label="重复提醒冷却（秒）"
-            ><el-input-number
-              v-model="form.cooldown_seconds"
-              :min="30"
-              :max="86400"
+        </section>
+        <section class="money-form-section" aria-label="金额与统计">
+          <h3>金额与统计</h3>
+          <el-form-item label="今日统计时区"
+            ><el-select
+              v-model="form.usage_timezone"
+              filterable
+              allow-create
+              default-first-option
+              ><el-option
+                value=""
+                :label="`继承平台时区 · ${platform.current?.timezone ?? 'Asia/Shanghai'}`" /><el-option
+                value="Asia/Shanghai"
+                label="北京时间 · Asia/Shanghai" /><el-option
+                value="America/New_York"
+                label="美国东部 · America/New_York" /><el-option
+                value="UTC"
+                label="UTC" /></el-select
+          ></el-form-item>
+          <CurrencyEditor
+            v-model="form.currency"
+            :preview-path="currencyPreviewPath"
+            source-label="该上游站点"
+          />
+          <p v-if="!currencyPreviewPath" class="section-footnote">
+            账户首次保存或地址有更改时，保存后再读取对应站点参数；也可以先手动核对。
+          </p>
+        </section>
+        <section class="money-form-section" aria-label="余额监控与通知">
+          <h3>余额监控与通知</h3>
+          <el-form-item label="定时监控余额"
+            ><el-switch v-model="form.monitor_enabled"
           /></el-form-item>
-        </div>
-        <el-form-item label="余额通知目标"
-          ><el-select
-            v-model="form.notify_binding_ids"
-            multiple
-            placeholder="选择本平台 Webhook 或已设置接收会话的机器人"
-            ><el-option
-              v-for="b in targets"
-              :key="b.id"
-              :value="b.id"
-              :label="b.name" /></el-select
-        ></el-form-item>
-        <el-form-item label="启用接入"
-          ><el-switch v-model="form.enabled" /></el-form-item
-        ><el-form-item label="定时监控余额"
-          ><el-switch v-model="form.monitor_enabled" /></el-form-item
-        ><el-checkbox v-model="form.notify_recovery"
-          >余额恢复时通知</el-checkbox
-        >
-        <p class="section-footnote">
-          保存不发送测试通知。开启监控后按配置检查；参数不全、身份不匹配和接口拒绝不会被当成零余额。先保存账户后可读取该上游的金额参数。
-        </p>
+          <YuanThresholdFields
+            v-model:low="form.threshold_cny"
+            v-model:recovery="form.recovery_threshold_cny"
+            :error="amountError"
+            @edited="amountError = ''"
+          />
+          <p class="section-footnote">
+            该账户以人民币阈值为准；更改换算参数后，比较用的 quota
+            会按新口径计算。
+          </p>
+          <el-form-item label="允许查询的本平台机器人"
+            ><el-select
+              v-model="form.query_binding_ids"
+              multiple
+              placeholder="留空则不开放给机器人；网页仍可查询"
+              ><el-option
+                v-for="b in bots"
+                :key="b.id"
+                :value="b.id"
+                :label="b.name" /></el-select
+          ></el-form-item>
+          <div class="form-grid">
+            <el-form-item label="检查间隔（秒）"
+              ><el-input-number
+                v-model="form.poll_seconds"
+                :min="30"
+                :max="86400" /></el-form-item
+            ><el-form-item label="重复提醒冷却（秒）"
+              ><el-input-number
+                v-model="form.cooldown_seconds"
+                :min="30"
+                :max="86400"
+            /></el-form-item>
+          </div>
+          <el-form-item label="余额通知目标"
+            ><el-select
+              v-model="form.notify_binding_ids"
+              multiple
+              placeholder="选择本平台 Webhook 或已设置接收会话的机器人"
+              ><el-option
+                v-for="b in targets"
+                :key="b.id"
+                :value="b.id"
+                :label="b.name" /></el-select
+          ></el-form-item>
+          <el-checkbox v-model="form.notify_recovery"
+            >余额恢复时通知</el-checkbox
+          >
+          <p class="section-footnote">
+            保存不发送测试通知。开启监控后按配置检查；参数不全、身份不匹配和接口拒绝不会被当成零余额。先保存账户后可读取该上游的金额参数。
+          </p>
+        </section>
         <div class="form-footer">
           <el-button @click="dialog = false">取消</el-button
           ><el-button type="primary" native-type="submit" :loading="busy"
