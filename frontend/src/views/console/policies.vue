@@ -287,7 +287,7 @@ async function showPreview(): Promise<void> {
                     show-word-limit
                 /></el-form-item>
                 <p class="section-footnote">
-                  占位符：{channel_name}、{channel_id}、{status_code}、{model}、{error_message}、{count}、{log_time}、{log_id}、{upstream_request_id}、{request_id}。日志时间取自原日志
+                  占位符：{channel_name}、{channel_id}、{status_code}、{model}、{error_message}、{count}、{log_time}、{upstream_request_id}、{request_id}。日志时间取自原日志
                   created_at，与当前平台日志页使用相同的显示时区，不额外偏移时间；日志
                   ID 用于核对原记录。{request_id} 为平台请求 ID，不是上游请求
                   ID。旧模板中的错误码和告警时间行会自动移除，缺少的追踪字段自动补入；缺失字段显示“未提供”。

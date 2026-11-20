@@ -13,10 +13,11 @@ import aiosqlite
 
 from ..client import UpstreamError
 from ..models import LogRecord
+from ..notifications import truncate_utf8
 from ..persistence import enqueue, row, rows
 from ..redaction import redact_text
 from .error_scans import SCAN_KEY, ErrorScan
-from .models import ErrorRule, MonitoringConfig
+from .models import ERROR_TEMPLATE, ErrorRule, MonitoringConfig
 
 if TYPE_CHECKING:
     from ..runtime import Runtime
@@ -30,7 +31,6 @@ def preview(rule: ErrorRule, sample: dict[str, Any], *, timezone: str = "Asia/Sh
         model="kimi-k3.1-pro",
         error_message="status_code=400, developer is not supported",
         log_time="未提供",
-        log_id="未提供",
         request_id="未提供",
         upstream_request_id="未提供",
         count=7,
@@ -38,24 +38,22 @@ def preview(rule: ErrorRule, sample: dict[str, Any], *, timezone: str = "Asia/Sh
     values = {**defaults, **{k: v for k, v in sample.items() if k in defaults}}
     if "log_created_at" in sample:
         values["log_time"] = error_log_time(sample["log_created_at"], timezone)
-    for field in ("log_time", "log_id", "request_id", "upstream_request_id"):
+    for field in ("log_time", "request_id", "upstream_request_id"):
         values[field] = values[field] or "未提供"
+    if rule.template == ERROR_TEMPLATE:
+        # Keep the trace fields after the error text without exceeding the text Webhook budget.
+        for field, limit in (("channel_name", 160), ("model", 120), ("error_message", 900)):
+            values[field] = truncate_utf8(str(values[field]), limit)
     text = rule.template.format_map(values)
     fields = {name for _, name, _, _ in Formatter().parse(rule.template)}
     metadata = []
     for field, label in (
         ("log_time", "错误日志时间"),
-        ("log_id", "日志 ID"),
         ("upstream_request_id", "上游请求 ID"),
+        ("request_id", "平台请求 ID"),
     ):
         if field not in fields:
             metadata.append(f"{label}：{values[field]}")
-    if (
-        values["upstream_request_id"] == "未提供"
-        and values["request_id"] != "未提供"
-        and "request_id" not in fields
-    ):
-        metadata.append(f"平台请求 ID：{values['request_id']}")
     if not metadata:
         return text
     # Keep trace details ahead of long error messages, including saved legacy templates.

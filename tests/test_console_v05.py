@@ -344,6 +344,6 @@ async def test_alert_preview_uses_platform_log_timezone_and_omits_removed_rows(a
     data = response.json()["data"]
     assert data["sends_messages"] is False
     assert "错误日志时间：2026年11月14日 03:34:09" in data["text"]
-    assert "日志 ID：123456" in data["text"]
+    assert "日志 ID：" not in data["text"]
     assert "错误码：" not in data["text"] and "告警时间：" not in data["text"]
     assert "北京时间" not in data["text"]
